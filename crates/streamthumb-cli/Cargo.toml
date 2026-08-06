@@ -1,0 +1,20 @@
+[package]
+name = "streamthumb-cli"
+description = "Command-line frontend for streamthumb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "streamthumb"
+path = "src/main.rs"
+
+[dependencies]
+streamthumb-core = { path = "../streamthumb-core" }
+streamthumb-png = { path = "../streamthumb-png" }
+
+[lints]
+workspace = true
+

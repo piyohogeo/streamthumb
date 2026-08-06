@@ -1,0 +1,6 @@
+/target/
+/pkg/
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/coverage/
+**/*.rs.bk

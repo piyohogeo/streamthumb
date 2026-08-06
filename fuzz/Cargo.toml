@@ -1,0 +1,35 @@
+[package]
+name = "streamthumb-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+streamthumb-core = { path = "../crates/streamthumb-core" }
+streamthumb-png = { path = "../crates/streamthumb-png" }
+
+[[bin]]
+name = "decode_rows"
+path = "fuzz_targets/decode_rows.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "thumbnail_png"
+path = "fuzz_targets/thumbnail_png.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "area_downsampler"
+path = "fuzz_targets/area_downsampler.rs"
+test = false
+doc = false
+bench = false
+

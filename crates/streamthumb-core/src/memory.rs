@@ -1,0 +1,218 @@
+use crate::{Dimensions, Error, OutputFormat, Result};
+
+const NORMALIZED_PIXEL_BYTES: usize = 4;
+const HORIZONTAL_ACCUMULATOR_BYTES_PER_PIXEL: usize = 5 * size_of::<u128>();
+const VERTICAL_ACCUMULATOR_BYTES_PER_PIXEL: usize = 5 * size_of::<u128>();
+const DECODER_STAGING_BYTES: usize = 160 * 1024;
+const PNG_ENCODER_STATE_BYTES: usize = 128 * 1024;
+
+/// A conservative breakdown of buffers owned by the planned streaming path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryEstimate {
+    pub decoder_rows_bytes: usize,
+    pub decoder_staging_bytes: usize,
+    pub normalized_row_bytes: usize,
+    pub horizontal_accumulator_bytes: usize,
+    pub vertical_accumulator_bytes: usize,
+    pub output_rgba_bytes: usize,
+    pub encoder_state_bytes: usize,
+    pub encoded_output_bytes: usize,
+    pub total_bytes: usize,
+}
+
+/// Estimates working memory without including encoded input storage or encoder state.
+///
+/// The decoder allowance includes three packed source rows and conservative
+/// staging space for DEFLATE history and buffered decompressed data. Accumulator
+/// constants reserve four premultiplied `u128` color channels plus one weight per
+/// output pixel. Encoder state is not included yet.
+pub fn estimate_working_memory(
+    source: Dimensions,
+    output: Dimensions,
+    source_bytes_per_pixel: u8,
+) -> Result<MemoryEstimate> {
+    estimate_working_memory_for_output(source, output, source_bytes_per_pixel, OutputFormat::Rgba)
+}
+
+/// Estimates working memory for a specific public output representation.
+pub fn estimate_working_memory_for_output(
+    source: Dimensions,
+    output: Dimensions,
+    source_bytes_per_pixel: u8,
+    output_format: OutputFormat,
+) -> Result<MemoryEstimate> {
+    if source_bytes_per_pixel == 0 {
+        return Err(Error::InvalidSourceBytesPerPixel);
+    }
+
+    let source_width = usize::try_from(source.width).map_err(|_| overflow("source width"))?;
+    let output_width = usize::try_from(output.width).map_err(|_| overflow("output width"))?;
+    let output_pixels =
+        usize::try_from(output.pixels()?).map_err(|_| overflow("output pixel count conversion"))?;
+
+    let packed_row_bytes = checked_product(
+        &[source_width, usize::from(source_bytes_per_pixel)],
+        "packed decoder row",
+    )?
+    .checked_add(1)
+    .ok_or_else(|| overflow("PNG filter byte"))?;
+    let decoder_rows_bytes = checked_product(&[packed_row_bytes, 3], "decoder row buffers")?;
+    let decoder_staging_bytes = DECODER_STAGING_BYTES;
+    let normalized_row_bytes = checked_product(
+        &[source_width, NORMALIZED_PIXEL_BYTES],
+        "normalized row buffer",
+    )?;
+    let horizontal_accumulator_bytes = checked_product(
+        &[output_width, HORIZONTAL_ACCUMULATOR_BYTES_PER_PIXEL],
+        "horizontal accumulator",
+    )?;
+    let vertical_accumulator_bytes = checked_product(
+        &[output_width, VERTICAL_ACCUMULATOR_BYTES_PER_PIXEL],
+        "vertical accumulator",
+    )?;
+    let output_rgba_bytes = checked_product(
+        &[output_pixels, NORMALIZED_PIXEL_BYTES],
+        "output RGBA buffer",
+    )?;
+    let (encoder_state_bytes, encoded_output_bytes) = match output_format {
+        OutputFormat::Rgba => (0, 0),
+        OutputFormat::Png => (
+            PNG_ENCODER_STATE_BYTES,
+            estimate_encoded_png_bytes(output, output_rgba_bytes)?,
+        ),
+    };
+
+    let total_bytes = checked_sum(
+        &[
+            decoder_rows_bytes,
+            decoder_staging_bytes,
+            normalized_row_bytes,
+            horizontal_accumulator_bytes,
+            vertical_accumulator_bytes,
+            output_rgba_bytes,
+            encoder_state_bytes,
+            encoded_output_bytes,
+        ],
+        "total working memory",
+    )?;
+
+    Ok(MemoryEstimate {
+        decoder_rows_bytes,
+        decoder_staging_bytes,
+        normalized_row_bytes,
+        horizontal_accumulator_bytes,
+        vertical_accumulator_bytes,
+        output_rgba_bytes,
+        encoder_state_bytes,
+        encoded_output_bytes,
+        total_bytes,
+    })
+}
+
+fn estimate_encoded_png_bytes(output: Dimensions, rgba_bytes: usize) -> Result<usize> {
+    let filtered_bytes = rgba_bytes
+        .checked_add(usize::try_from(output.height).map_err(|_| overflow("output height"))?)
+        .ok_or_else(|| overflow("filtered PNG bytes"))?;
+    let deflate_allowance = filtered_bytes
+        .checked_add(filtered_bytes / 8)
+        .ok_or_else(|| overflow("encoded PNG DEFLATE allowance"))?;
+    deflate_allowance
+        .checked_add(64 * 1024)
+        .ok_or_else(|| overflow("encoded PNG container allowance"))
+}
+
+fn checked_product(values: &[usize], operation: &'static str) -> Result<usize> {
+    values.iter().try_fold(1_usize, |product, value| {
+        product
+            .checked_mul(*value)
+            .ok_or_else(|| overflow(operation))
+    })
+}
+
+fn checked_sum(values: &[usize], operation: &'static str) -> Result<usize> {
+    values.iter().try_fold(0_usize, |sum, value| {
+        sum.checked_add(*value).ok_or_else(|| overflow(operation))
+    })
+}
+
+const fn overflow(operation: &'static str) -> Error {
+    Error::IntegerOverflow { operation }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimate_has_an_auditable_breakdown() {
+        let estimate = estimate_working_memory(
+            Dimensions::new(1_000, 500).unwrap(),
+            Dimensions::new(100, 50).unwrap(),
+            4,
+        )
+        .unwrap();
+
+        assert_eq!(estimate.decoder_rows_bytes, 12_003);
+        assert_eq!(estimate.decoder_staging_bytes, 163_840);
+        assert_eq!(estimate.normalized_row_bytes, 4_000);
+        assert_eq!(estimate.horizontal_accumulator_bytes, 8_000);
+        assert_eq!(estimate.vertical_accumulator_bytes, 8_000);
+        assert_eq!(estimate.output_rgba_bytes, 20_000);
+        assert_eq!(estimate.encoder_state_bytes, 0);
+        assert_eq!(estimate.encoded_output_bytes, 0);
+        assert_eq!(estimate.total_bytes, 215_843);
+    }
+
+    #[test]
+    fn png_output_includes_encoder_and_bounded_output_storage() {
+        let source = Dimensions::new(1_000, 500).unwrap();
+        let output = Dimensions::new(100, 50).unwrap();
+        let rgba = estimate_working_memory(source, output, 4).unwrap();
+        let png = estimate_working_memory_for_output(source, output, 4, OutputFormat::Png).unwrap();
+
+        assert_eq!(png.encoder_state_bytes, 128 * 1024);
+        assert!(png.encoded_output_bytes > png.output_rgba_bytes);
+        assert_eq!(
+            png.total_bytes,
+            rgba.total_bytes + png.encoder_state_bytes + png.encoded_output_bytes
+        );
+    }
+
+    #[test]
+    fn rejects_zero_source_bytes_per_pixel() {
+        assert_eq!(
+            estimate_working_memory(
+                Dimensions::new(1, 1).unwrap(),
+                Dimensions::new(1, 1).unwrap(),
+                0,
+            ),
+            Err(Error::InvalidSourceBytesPerPixel)
+        );
+    }
+
+    #[test]
+    fn estimate_does_not_scale_with_source_height() {
+        let output = Dimensions::new(100, 100).unwrap();
+        let short = estimate_working_memory(Dimensions::new(4_000, 1).unwrap(), output, 4).unwrap();
+        let tall =
+            estimate_working_memory(Dimensions::new(4_000, 100_000).unwrap(), output, 4).unwrap();
+
+        assert_eq!(short, tall);
+    }
+
+    #[test]
+    fn checked_arithmetic_reports_overflow() {
+        assert_eq!(
+            checked_product(&[usize::MAX, 2], "test product"),
+            Err(Error::IntegerOverflow {
+                operation: "test product"
+            })
+        );
+        assert_eq!(
+            checked_sum(&[usize::MAX, 1], "test sum"),
+            Err(Error::IntegerOverflow {
+                operation: "test sum"
+            })
+        );
+    }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "streamthumb-cloudflare-worker-example",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@streamthumb/wasm": "file:../../pkg"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  }
+}
+

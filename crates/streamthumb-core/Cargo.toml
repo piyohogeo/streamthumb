@@ -1,0 +1,15 @@
+[package]
+name = "streamthumb-core"
+description = "Resource-bounded thumbnail planning primitives for streamthumb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "streamthumb_core"
+
+[lints]
+workspace = true
+
