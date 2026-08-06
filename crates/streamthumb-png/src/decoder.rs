@@ -67,7 +67,7 @@ where
     let source_color = header.color_type;
     validate_source_color_depth(source_color, header.bit_depth)?;
     reject_interlacing(header.interlaced)?;
-    let source_bytes_per_pixel = planning_bytes_per_pixel(source_color)?;
+    let source_bytes_per_pixel = planning_bytes_per_pixel(source_color, header.bit_depth)?;
     let plan = plan_thumbnail(
         InputInfo {
             dimensions,
@@ -246,7 +246,7 @@ fn thumbnail_png_adam7_rgba_planned(
             "Adam7 path received a non-interlaced PNG".to_owned(),
         ));
     }
-    let source_bytes_per_pixel = planning_bytes_per_pixel(source_color)?;
+    let source_bytes_per_pixel = planning_bytes_per_pixel(source_color, header.bit_depth)?;
     let plan = plan_thumbnail_sparse(
         InputInfo {
             dimensions,
@@ -444,13 +444,13 @@ fn validate_source_color_depth(color: ColorType, depth: BitDepth) -> Result<()> 
             BitDepth::One | BitDepth::Two | BitDepth::Four | BitDepth::Eight
         ),
         ColorType::Grayscale | ColorType::GrayscaleAlpha | ColorType::Rgb | ColorType::Rgba => {
-            depth == BitDepth::Eight
+            matches!(depth, BitDepth::Eight | BitDepth::Sixteen)
         }
     };
     if !valid_depth {
         return Err(Error::Unsupported {
             feature: UnsupportedFeature::BitDepth,
-            detail: "only 8-bit direct samples and 1-, 2-, 4-, or 8-bit palette indices are supported",
+            detail: "only 8- or 16-bit direct samples and 1-, 2-, 4-, or 8-bit palette indices are supported",
         });
     }
     Ok(())
@@ -476,30 +476,58 @@ fn reject_separate_transparency(color: ColorType, has_transparency: bool) -> Res
     Ok(())
 }
 
-fn planning_bytes_per_pixel(color: ColorType) -> Result<u8> {
+fn planning_bytes_per_pixel(color: ColorType, depth: BitDepth) -> Result<u8> {
     if color == ColorType::Indexed {
         Ok(1)
     } else {
-        bytes_per_pixel(color)
+        direct_bytes_per_pixel(color, depth)
     }
 }
 
-fn bytes_per_pixel(color: ColorType) -> Result<u8> {
+fn direct_channel_count(color: ColorType) -> Result<u8> {
     match color {
         ColorType::Grayscale => Ok(1),
         ColorType::GrayscaleAlpha => Ok(2),
         ColorType::Rgb => Ok(3),
         ColorType::Rgba => Ok(4),
-        _ => Err(Error::Unsupported {
+        ColorType::Indexed => Err(Error::Unsupported {
             feature: UnsupportedFeature::ColorType,
-            detail: "only grayscale, grayscale-alpha, RGB, and RGBA are supported",
+            detail: "palette pixels do not have a direct channel count",
         }),
     }
 }
 
+fn direct_bytes_per_pixel(color: ColorType, depth: BitDepth) -> Result<u8> {
+    let sample_bytes = match depth {
+        BitDepth::Eight => 1,
+        BitDepth::Sixteen => 2,
+        BitDepth::One | BitDepth::Two | BitDepth::Four => {
+            return Err(Error::Unsupported {
+                feature: UnsupportedFeature::BitDepth,
+                detail: "sub-byte direct samples are not supported",
+            });
+        }
+    };
+    direct_channel_count(color)?
+        .checked_mul(sample_bytes)
+        .ok_or_else(|| {
+            streamthumb_core::Error::IntegerOverflow {
+                operation: "direct source bytes per pixel",
+            }
+            .into()
+        })
+}
+
 enum SourceFormat {
-    Direct { color: ColorType, bytes: usize },
-    Indexed { colors: Vec<[u8; 4]>, bits: usize },
+    Direct {
+        color: ColorType,
+        depth: BitDepth,
+        bytes: usize,
+    },
+    Indexed {
+        colors: Vec<[u8; 4]>,
+        bits: usize,
+    },
 }
 
 impl SourceFormat {
@@ -507,7 +535,8 @@ impl SourceFormat {
         if info.color_type != ColorType::Indexed {
             return Ok(Self::Direct {
                 color: info.color_type,
-                bytes: usize::from(bytes_per_pixel(info.color_type)?),
+                depth: info.bit_depth,
+                bytes: usize::from(direct_bytes_per_pixel(info.color_type, info.bit_depth)?),
             });
         }
 
@@ -590,7 +619,11 @@ impl SourceFormat {
 
     fn pixel(&self, source: &[u8], index: usize) -> Result<[u8; 4]> {
         match self {
-            Self::Direct { color, bytes } => {
+            Self::Direct {
+                color,
+                depth,
+                bytes,
+            } => {
                 let start =
                     index
                         .checked_mul(*bytes)
@@ -606,7 +639,7 @@ impl SourceFormat {
                 let sample = source.get(start..end).ok_or_else(|| {
                     Error::DecodeFailure("decoded PNG row ended within a sample".to_owned())
                 })?;
-                normalize_direct_pixel(sample, *color)
+                normalize_direct_pixel(sample, *color, *depth)
             }
             Self::Indexed { colors, bits } => {
                 let bit_offset =
@@ -666,17 +699,78 @@ fn normalize_row(source: &[u8], format: &SourceFormat, destination: &mut [u8]) -
     Ok(())
 }
 
-fn normalize_direct_pixel(source: &[u8], color: ColorType) -> Result<[u8; 4]> {
-    match color {
-        ColorType::Grayscale if source.len() == 1 => Ok([source[0], source[0], source[0], u8::MAX]),
-        ColorType::GrayscaleAlpha if source.len() == 2 => {
-            Ok([source[0], source[0], source[0], source[1]])
+fn normalize_direct_pixel(source: &[u8], color: ColorType, depth: BitDepth) -> Result<[u8; 4]> {
+    let channels = usize::from(direct_channel_count(color)?);
+    let sample_bytes = match depth {
+        BitDepth::Eight => 1,
+        BitDepth::Sixteen => 2,
+        BitDepth::One | BitDepth::Two | BitDepth::Four => {
+            return Err(Error::Unsupported {
+                feature: UnsupportedFeature::BitDepth,
+                detail: "sub-byte direct samples are not supported",
+            });
         }
-        ColorType::Rgb if source.len() == 3 => Ok([source[0], source[1], source[2], u8::MAX]),
-        ColorType::Rgba if source.len() == 4 => Ok([source[0], source[1], source[2], source[3]]),
-        ColorType::Grayscale | ColorType::GrayscaleAlpha | ColorType::Rgb | ColorType::Rgba => Err(
-            Error::DecodeFailure(format!("decoded PNG sample has {} bytes", source.len())),
-        ),
+    };
+    let expected =
+        channels
+            .checked_mul(sample_bytes)
+            .ok_or(streamthumb_core::Error::IntegerOverflow {
+                operation: "direct sample length",
+            })?;
+    if source.len() != expected {
+        return Err(Error::DecodeFailure(format!(
+            "decoded PNG sample has {} bytes; expected {expected}",
+            source.len()
+        )));
+    }
+
+    let channel = |index: usize| -> Result<u8> {
+        let start =
+            index
+                .checked_mul(sample_bytes)
+                .ok_or(streamthumb_core::Error::IntegerOverflow {
+                    operation: "direct channel offset",
+                })?;
+        match depth {
+            BitDepth::Eight => source.get(start).copied().ok_or_else(|| {
+                Error::DecodeFailure("decoded PNG sample ended within a channel".to_owned())
+            }),
+            BitDepth::Sixteen => {
+                let end = start
+                    .checked_add(2)
+                    .ok_or(streamthumb_core::Error::IntegerOverflow {
+                        operation: "16-bit channel end",
+                    })?;
+                let bytes = source.get(start..end).ok_or_else(|| {
+                    Error::DecodeFailure("decoded PNG sample ended within a channel".to_owned())
+                })?;
+                let value = u16::from_be_bytes([bytes[0], bytes[1]]);
+                let rounded = (u32::from(value) * 255 + 32_767) / 65_535;
+                u8::try_from(rounded).map_err(|_| {
+                    streamthumb_core::Error::IntegerOverflow {
+                        operation: "16-bit sample normalization",
+                    }
+                    .into()
+                })
+            }
+            BitDepth::One | BitDepth::Two | BitDepth::Four => Err(Error::Unsupported {
+                feature: UnsupportedFeature::BitDepth,
+                detail: "sub-byte direct samples are not supported",
+            }),
+        }
+    };
+
+    match color {
+        ColorType::Grayscale => {
+            let gray = channel(0)?;
+            Ok([gray, gray, gray, u8::MAX])
+        }
+        ColorType::GrayscaleAlpha => {
+            let gray = channel(0)?;
+            Ok([gray, gray, gray, channel(1)?])
+        }
+        ColorType::Rgb => Ok([channel(0)?, channel(1)?, channel(2)?, u8::MAX]),
+        ColorType::Rgba => Ok([channel(0)?, channel(1)?, channel(2)?, channel(3)?]),
         ColorType::Indexed => Err(Error::DecodeFailure(
             "palette sample reached the direct normalizer".to_owned(),
         )),
@@ -779,13 +873,29 @@ mod tests {
     }
 
     fn encode_adam7_png(width: u32, height: u32, color: ColorType, pixels: &[u8]) -> Vec<u8> {
-        let sample_bytes = match color {
+        encode_adam7_direct_png(width, height, color, BitDepth::Eight, pixels)
+    }
+
+    fn encode_adam7_direct_png(
+        width: u32,
+        height: u32,
+        color: ColorType,
+        depth: BitDepth,
+        pixels: &[u8],
+    ) -> Vec<u8> {
+        let channels = match color {
             ColorType::Grayscale => 1_usize,
             ColorType::GrayscaleAlpha => 2_usize,
             ColorType::Rgb => 3_usize,
             ColorType::Rgba => 4_usize,
             _ => panic!("test helper does not support this color type"),
         };
+        let sample_bytes = channels
+            * match depth {
+                BitDepth::Eight => 1,
+                BitDepth::Sixteen => 2,
+                _ => panic!("test direct helper supports only 8- and 16-bit samples"),
+            };
         let mut filtered = Vec::new();
         for pass in ADAM7_PASSES {
             let samples = pass_sample_count(width, pass.x_offset, pass.x_stride);
@@ -815,7 +925,11 @@ mod tests {
         let mut ihdr = Vec::with_capacity(13);
         ihdr.extend_from_slice(&width.to_be_bytes());
         ihdr.extend_from_slice(&height.to_be_bytes());
-        ihdr.push(8);
+        ihdr.push(match depth {
+            BitDepth::Eight => 8,
+            BitDepth::Sixteen => 16,
+            _ => unreachable!(),
+        });
         ihdr.push(match color {
             ColorType::Grayscale => 0,
             ColorType::Rgb => 2,
@@ -1126,6 +1240,48 @@ mod tests {
     }
 
     #[test]
+    fn adam7_sixteen_bit_formats_match_non_interlaced_thumbnails() {
+        for (color, channels) in [
+            (ColorType::Grayscale, 1_u32),
+            (ColorType::GrayscaleAlpha, 2_u32),
+            (ColorType::Rgb, 3_u32),
+            (ColorType::Rgba, 4_u32),
+        ] {
+            let width = 11_u32;
+            let height = 9_u32;
+            let mut pixels = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    for channel in 0..channels {
+                        let value =
+                            u16::try_from((x * 7_919 + y * 4_099 + channel * 16_381) % 65_536)
+                                .unwrap();
+                        pixels.extend_from_slice(&value.to_be_bytes());
+                    }
+                }
+            }
+            let sequential = encode_png(
+                width,
+                height,
+                color,
+                BitDepth::Sixteen,
+                Filter::Paeth,
+                &pixels,
+            );
+            let adam7 = encode_adam7_direct_png(width, height, color, BitDepth::Sixteen, &pixels);
+            let mut options = default_options();
+            options.max_width = 5;
+            options.max_height = 4;
+
+            assert_eq!(
+                thumbnail_png_rgba(&adam7, &options).unwrap(),
+                thumbnail_png_rgba(&sequential, &options).unwrap(),
+                "16-bit Adam7 mismatch for {color:?}"
+            );
+        }
+    }
+
+    #[test]
     fn adam7_palette_depths_match_non_interlaced_thumbnails() {
         for depth in [
             BitDepth::One,
@@ -1239,12 +1395,13 @@ mod tests {
 
     #[test]
     fn adam7_truncation_fails_without_panicking() {
-        for (color, sample_bytes) in [
-            (ColorType::GrayscaleAlpha, 2_usize),
-            (ColorType::Rgba, 4_usize),
+        for (color, depth, sample_bytes) in [
+            (ColorType::GrayscaleAlpha, BitDepth::Eight, 2_usize),
+            (ColorType::Rgba, BitDepth::Eight, 4_usize),
+            (ColorType::Rgba, BitDepth::Sixteen, 8_usize),
         ] {
             let pixels = vec![42; 17 * 13 * sample_bytes];
-            let mut encoded = encode_adam7_png(17, 13, color, &pixels);
+            let mut encoded = encode_adam7_direct_png(17, 13, color, depth, &pixels);
             encoded.truncate(encoded.len() - 20);
             assert!(thumbnail_png_rgba(&encoded, &default_options()).is_err());
         }
@@ -1560,22 +1717,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_sixteen_bit_pngs() {
-        let sixteen_bit = encode_png(
-            1,
-            1,
-            ColorType::Rgb,
-            BitDepth::Sixteen,
-            Filter::NoFilter,
-            &[0; 6],
-        );
-        assert!(matches!(
-            decode_png_rows(&sixteen_bit, &default_options(), |_| Ok(())).unwrap_err(),
-            Error::Unsupported {
-                feature: UnsupportedFeature::BitDepth,
-                ..
+    fn normalizes_sixteen_bit_direct_color_with_rounding() {
+        let cases = [
+            (
+                ColorType::Grayscale,
+                vec![0x80, 0x00],
+                vec![128, 128, 128, 255],
+            ),
+            (
+                ColorType::GrayscaleAlpha,
+                vec![0x12, 0x34, 0xab, 0xcd],
+                vec![18, 18, 18, 171],
+            ),
+            (
+                ColorType::Rgb,
+                vec![0, 0, 0x80, 0, 0xff, 0xff],
+                vec![0, 128, 255, 255],
+            ),
+            (
+                ColorType::Rgba,
+                vec![0x01, 0x01, 0x7f, 0xff, 0x80, 0, 0xff, 0xff],
+                vec![1, 127, 128, 255],
+            ),
+        ];
+
+        for (color, source, expected) in cases {
+            let encoded = encode_png(1, 1, color, BitDepth::Sixteen, Filter::Paeth, &source);
+            let mut actual = Vec::new();
+            let info = decode_png_rows(&encoded, &default_options(), |row| {
+                actual.extend_from_slice(row.pixels);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(actual, expected, "16-bit mismatch for {color:?}");
+            if color == ColorType::Rgba {
+                assert_eq!(info.plan.memory.decoder_rows_bytes, 27);
             }
-        ));
+        }
     }
 
     #[test]

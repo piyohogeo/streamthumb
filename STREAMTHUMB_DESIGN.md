@@ -1136,3 +1136,13 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 5. Memory planning conservatively reserves one packed source byte per pixel, the existing normalized RGBA row, and decoder staging. The lookup table is bounded to 1 KiB and fits within the documented decoder staging allowance.
 6. Tests cover exact palette and alpha expansion, all four legal bit depths, non-interlaced versus Adam7 equivalence, omitted trailing `tRNS` alpha values, and malformed out-of-range indices in both decode orders.
 7. Palette support flows through the existing Rust thumbnail, row callback, CLI, and WASM APIs without format-specific public options. Sixteen-bit samples remain deferred.
+
+### Phase 11 decisions
+
+1. Direct-color 16-bit support covers grayscale, grayscale-alpha, RGB, and RGBA in both non-interlaced and Adam7 forms. Palette indices remain limited to the PNG-defined 1-, 2-, 4-, and 8-bit depths.
+2. Sixteen-bit samples are read as big-endian integers and mapped to 8-bit with nearest-integer scaling: `(value * 255 + 32767) / 65535`. This preserves both endpoints and uses low-byte information instead of truncating it.
+3. Conversion occurs per source pixel in the existing row or Adam7 pass pipeline. The resampler continues to receive straight-alpha RGBA8 and therefore requires no 16-bit-specific accumulator path.
+4. Memory planning reserves 2, 4, 6, or 8 source bytes per pixel for 16-bit grayscale, grayscale-alpha, RGB, or RGBA respectively. Normalized rows, sparse accumulators, and bounded outputs remain unchanged.
+5. The decoder remains in identity transformation mode. Streamthumb validates source sample lengths and performs the documented conversion itself for deterministic native and WebAssembly output.
+6. Tests cover exact representative rounding values, all four direct color types, 8-byte RGBA16 decoder-row accounting, non-interlaced versus Adam7 equivalence, and truncated 16-bit Adam7 input.
+7. Sixteen-bit support flows through the existing Rust row callback, thumbnail, CLI, and WASM APIs. Separate grayscale/RGB `tRNS` transparency and APNG remain unsupported.
