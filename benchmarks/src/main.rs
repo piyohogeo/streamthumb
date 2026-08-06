@@ -35,6 +35,7 @@ struct Case {
     width: u32,
     height: u32,
     pattern: Pattern,
+    interlaced: bool,
 }
 
 const SMOKE_CASES: &[Case] = &[
@@ -43,18 +44,21 @@ const SMOKE_CASES: &[Case] = &[
         width: 2_048,
         height: 2_048,
         pattern: Pattern::Blank,
+        interlaced: false,
     },
     Case {
         name: "wide-gradient",
         width: 8_192,
         height: 64,
         pattern: Pattern::Gradient,
+        interlaced: false,
     },
     Case {
         name: "tall-noise",
         width: 64,
         height: 8_192,
         pattern: Pattern::Noise,
+        interlaced: false,
     },
 ];
 
@@ -64,24 +68,45 @@ const MEMORY_CASES: &[Case] = &[
         width: 8_192,
         height: 8_192,
         pattern: Pattern::Blank,
+        interlaced: false,
     },
     Case {
         name: "16k-square-blank",
         width: 16_384,
         height: 16_384,
         pattern: Pattern::Blank,
+        interlaced: false,
     },
     Case {
         name: "very-wide-gradient",
         width: 100_000,
         height: 32,
         pattern: Pattern::Gradient,
+        interlaced: false,
     },
     Case {
         name: "very-tall-gradient",
         width: 32,
         height: 100_000,
         pattern: Pattern::Gradient,
+        interlaced: false,
+    },
+];
+
+const ADAM7_CASES: &[Case] = &[
+    Case {
+        name: "adam7-square-blank",
+        width: 2_048,
+        height: 2_048,
+        pattern: Pattern::Blank,
+        interlaced: true,
+    },
+    Case {
+        name: "adam7-wide-gradient",
+        width: 8_192,
+        height: 64,
+        pattern: Pattern::Gradient,
+        interlaced: true,
     },
 ];
 
@@ -94,6 +119,9 @@ fn main() -> Result<()> {
         [_, command, directory] if command == "generate-memory" => {
             generate_corpus(Path::new(directory), MEMORY_CASES)
         }
+        [_, command, directory] if command == "generate-adam7" => {
+            generate_corpus(Path::new(directory), ADAM7_CASES)
+        }
         [_, command, method, input, output, max_dimension] if command == "run" => {
             let max_dimension = max_dimension.parse::<u32>()?;
             run_method(method, Path::new(input), Path::new(output), max_dimension)
@@ -102,6 +130,7 @@ fn main() -> Result<()> {
             eprintln!(
                 "usage:\n  streamthumb-benchmarks generate-smoke <directory>\n  \
                  streamthumb-benchmarks generate-memory <directory>\n  \
+                 streamthumb-benchmarks generate-adam7 <directory>\n  \
                  streamthumb-benchmarks run <streamthumb|image-rs> <input> <output> <max-dimension>"
             );
             Err("invalid benchmark arguments".into())
@@ -112,23 +141,105 @@ fn main() -> Result<()> {
 fn generate_corpus(directory: &Path, cases: &[Case]) -> Result<()> {
     fs::create_dir_all(directory)?;
     let mut manifest = BufWriter::new(File::create(directory.join("manifest.tsv"))?);
-    writeln!(manifest, "name\twidth\theight\tpattern\tfile")?;
+    writeln!(manifest, "name\twidth\theight\tpattern\tinterlaced\tfile")?;
 
     for case in cases {
         let file_name = format!("{}-{}x{}.png", case.name, case.width, case.height);
         let path = directory.join(&file_name);
-        write_png(&path, *case)?;
+        if case.interlaced {
+            write_adam7_png(&path, *case)?;
+        } else {
+            write_png(&path, *case)?;
+        }
         writeln!(
             manifest,
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             case.name,
             case.width,
             case.height,
             case.pattern.name(),
+            case.interlaced,
             file_name
         )?;
     }
     Ok(())
+}
+
+fn write_adam7_png(path: &Path, case: Case) -> Result<()> {
+    use flate2::{Compression, write::ZlibEncoder};
+
+    const PASSES: [(u32, u32, u32, u32); 7] = [
+        (8, 0, 8, 0),
+        (8, 4, 8, 0),
+        (4, 0, 8, 4),
+        (4, 2, 4, 0),
+        (2, 0, 4, 2),
+        (2, 1, 2, 0),
+        (1, 0, 2, 1),
+    ];
+    let mut compressor = ZlibEncoder::new(Vec::new(), Compression::default());
+    for (x_stride, x_offset, y_stride, y_offset) in PASSES {
+        let samples = case.width.saturating_sub(x_offset).div_ceil(x_stride);
+        let lines = case.height.saturating_sub(y_offset).div_ceil(y_stride);
+        if samples == 0 || lines == 0 {
+            continue;
+        }
+        for line in 0..lines {
+            compressor.write_all(&[0])?;
+            let y = y_offset + line * y_stride;
+            for sample in 0..samples {
+                let x = x_offset + sample * x_stride;
+                compressor.write_all(&adam7_pixel(case, x, y)?)?;
+            }
+        }
+    }
+    let compressed = compressor.finish()?;
+    let mut output = BufWriter::new(File::create(path)?);
+    output.write_all(b"\x89PNG\r\n\x1a\n")?;
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&case.width.to_be_bytes());
+    ihdr.extend_from_slice(&case.height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 1]);
+    write_chunk(&mut output, *b"IHDR", &ihdr)?;
+    write_chunk(&mut output, *b"IDAT", &compressed)?;
+    write_chunk(&mut output, *b"IEND", &[])?;
+    output.flush()?;
+    Ok(())
+}
+
+fn adam7_pixel(case: Case, x: u32, y: u32) -> Result<[u8; 4]> {
+    match case.pattern {
+        Pattern::Blank => Ok([32, 96, 160, 255]),
+        Pattern::Gradient => {
+            let red = scale_to_byte(x, case.width);
+            let green = scale_to_byte(y, case.height);
+            Ok([red, green, red.wrapping_add(green) / 2, 255])
+        }
+        Pattern::Noise => Err("Adam7 noise generation is not configured".into()),
+    }
+}
+
+fn write_chunk(output: &mut impl Write, chunk_type: [u8; 4], data: &[u8]) -> Result<()> {
+    output.write_all(&u32::try_from(data.len())?.to_be_bytes())?;
+    output.write_all(&chunk_type)?;
+    output.write_all(data)?;
+    let mut crc_input = Vec::with_capacity(4 + data.len());
+    crc_input.extend_from_slice(&chunk_type);
+    crc_input.extend_from_slice(data);
+    output.write_all(&crc32(&crc_input).to_be_bytes())?;
+    Ok(())
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = 0_u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
 }
 
 fn write_png(path: &Path, case: Case) -> Result<()> {

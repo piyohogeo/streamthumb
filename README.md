@@ -2,7 +2,7 @@
 
 `streamthumb` is a memory-bounded streaming PNG thumbnail generator for Rust and WebAssembly.
 
-The project currently implements checked thumbnail geometry, resource-limit validation, conservative working-memory planning, and a fused row-streaming PNG thumbnail path for non-interlaced 8-bit RGB/RGBA files. Raw RGBA, encoded PNG, native CLI, and WebAssembly APIs are available.
+The project currently implements checked thumbnail geometry, resource-limit validation, conservative working-memory planning, and bounded PNG thumbnail paths for non-interlaced and Adam7 8-bit RGB/RGBA files. Raw RGBA, encoded PNG, native CLI, and WebAssembly APIs are available.
 
 ## Workspace
 

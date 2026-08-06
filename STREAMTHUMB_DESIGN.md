@@ -1105,3 +1105,14 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 6. WASM linear-memory results include allocator-retained pages and the copied encoded input. Node heap and other JavaScript allocations are reported separately through process RSS and are outside the linear-memory value.
 7. The first local smoke baseline shows a 7.9 MiB streamthumb Peak RSS versus 36.9 MiB for image-rs on a 2,048-square blank source. All measured WASM smoke cases remain at or below 4 MiB linear memory.
 8. jSquash, wasm-image-optimization, and wasm-vips remain future benchmark adapters. Comparisons will pin distributable artifacts and equivalent settings rather than adding them to production dependencies.
+
+### Phase 8 decisions
+
+1. Adam7 samples are accumulated directly at their original source coordinates into exact output-resolution `u128` accumulators. No deinterlaced source frame or source-area bitmap is allocated.
+2. The sparse accumulator accepts pixels in arbitrary order and uses the same premultiplied-alpha and integer-overlap math as the ordered-row implementation.
+3. Adam7 has a distinct conservative memory plan: ordered horizontal and vertical row accumulators are replaced by five `u128` values per bounded output pixel. Decoder rows, staging, output, and encoder allowances remain included.
+4. The public thumbnail, CLI, and WASM paths accept static Adam7 RGB8 and RGBA8 PNGs. The lower-level row callback API continues to reject Adam7 because it promises complete normalized rows in ascending order.
+5. The implementation derives pass coordinates from the seven PNG pass constants and validates decoded pass row lengths before accessing samples. Empty passes in narrow or short images are skipped.
+6. Differential tests generate valid Adam7 data independently and compare RGB and RGBA thumbnails with the existing non-interlaced path. Exhaustive dimensions from 1 through 9 cover empty and partial passes.
+7. Adam7-specific tests cover truncation and rejection before decoding when the sparse memory plan exceeds the caller's budget.
+8. The benchmark package adds an `adam7` profile. A 2,048-square source measured 27.5 MiB native Peak RSS and 22.75 MiB WASM linear memory for a 512-square output, without a source-frame allocation.

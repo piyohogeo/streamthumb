@@ -4,8 +4,8 @@ set -euo pipefail
 profile="${1:-smoke}"
 max_dimension="${2:-512}"
 case "$profile" in
-  smoke|memory) ;;
-  *) echo "profile must be smoke or memory" >&2; exit 2 ;;
+  smoke|memory|adam7) ;;
+  *) echo "profile must be smoke, memory, or adam7" >&2; exit 2 ;;
 esac
 
 benchmark_root="$(cd "$(dirname "$0")" && pwd)"

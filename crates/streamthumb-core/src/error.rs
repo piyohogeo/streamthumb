@@ -38,11 +38,15 @@ pub enum Error {
     UnexpectedRow { expected: u32, actual: u32 },
     /// A normalized source row had the wrong byte length.
     InvalidRowLength { expected: usize, actual: usize },
+    /// A sparse source sample was outside the declared source dimensions.
+    InvalidPixelCoordinate { x: u32, y: u32 },
     /// Fewer source rows were provided than the declared source height.
     IncompleteImage {
         expected_rows: u32,
         actual_rows: u32,
     },
+    /// Fewer sparse source samples were provided than the declared source area.
+    IncompleteSamples { expected: u64, actual: u64 },
     /// A bounded internal allocation could not be satisfied.
     AllocationFailed { bytes: usize },
     /// The exact area weights did not cover an output pixel as expected.
@@ -88,12 +92,22 @@ impl fmt::Display for Error {
                 formatter,
                 "invalid RGBA row length: expected {expected} bytes, received {actual}"
             ),
+            Self::InvalidPixelCoordinate { x, y } => {
+                write!(
+                    formatter,
+                    "source pixel coordinate ({x}, {y}) is out of bounds"
+                )
+            }
             Self::IncompleteImage {
                 expected_rows,
                 actual_rows,
             } => write!(
                 formatter,
                 "incomplete image: expected {expected_rows} rows, received {actual_rows}"
+            ),
+            Self::IncompleteSamples { expected, actual } => write!(
+                formatter,
+                "incomplete sparse image: expected {expected} samples, received {actual}"
             ),
             Self::AllocationFailed { bytes } => {
                 write!(formatter, "failed to allocate a {bytes}-byte buffer")

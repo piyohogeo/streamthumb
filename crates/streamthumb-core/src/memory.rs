@@ -3,6 +3,7 @@ use crate::{Dimensions, Error, OutputFormat, Result};
 const NORMALIZED_PIXEL_BYTES: usize = 4;
 const HORIZONTAL_ACCUMULATOR_BYTES_PER_PIXEL: usize = 5 * size_of::<u128>();
 const VERTICAL_ACCUMULATOR_BYTES_PER_PIXEL: usize = 5 * size_of::<u128>();
+const SPARSE_ACCUMULATOR_BYTES_PER_PIXEL: usize = 5 * size_of::<u128>();
 const DECODER_STAGING_BYTES: usize = 160 * 1024;
 const PNG_ENCODER_STATE_BYTES: usize = 128 * 1024;
 
@@ -14,6 +15,7 @@ pub struct MemoryEstimate {
     pub normalized_row_bytes: usize,
     pub horizontal_accumulator_bytes: usize,
     pub vertical_accumulator_bytes: usize,
+    pub sparse_accumulator_bytes: usize,
     pub output_rgba_bytes: usize,
     pub encoder_state_bytes: usize,
     pub encoded_output_bytes: usize,
@@ -70,6 +72,7 @@ pub fn estimate_working_memory_for_output(
         &[output_width, VERTICAL_ACCUMULATOR_BYTES_PER_PIXEL],
         "vertical accumulator",
     )?;
+    let sparse_accumulator_bytes = 0;
     let output_rgba_bytes = checked_product(
         &[output_pixels, NORMALIZED_PIXEL_BYTES],
         "output RGBA buffer",
@@ -89,6 +92,7 @@ pub fn estimate_working_memory_for_output(
             normalized_row_bytes,
             horizontal_accumulator_bytes,
             vertical_accumulator_bytes,
+            sparse_accumulator_bytes,
             output_rgba_bytes,
             encoder_state_bytes,
             encoded_output_bytes,
@@ -102,11 +106,43 @@ pub fn estimate_working_memory_for_output(
         normalized_row_bytes,
         horizontal_accumulator_bytes,
         vertical_accumulator_bytes,
+        sparse_accumulator_bytes,
         output_rgba_bytes,
         encoder_state_bytes,
         encoded_output_bytes,
         total_bytes,
     })
+}
+
+/// Estimates working memory for arbitrary-order sparse source samples.
+///
+/// Sparse accumulation replaces the two row accumulators with one accumulator
+/// per bounded output pixel. This supports Adam7 pass order without retaining a
+/// full-resolution source frame.
+pub fn estimate_sparse_working_memory_for_output(
+    source: Dimensions,
+    output: Dimensions,
+    source_bytes_per_pixel: u8,
+    output_format: OutputFormat,
+) -> Result<MemoryEstimate> {
+    let mut estimate =
+        estimate_working_memory_for_output(source, output, source_bytes_per_pixel, output_format)?;
+    let output_pixels =
+        usize::try_from(output.pixels()?).map_err(|_| overflow("sparse output pixel count"))?;
+    let sparse_accumulator_bytes = checked_product(
+        &[output_pixels, SPARSE_ACCUMULATOR_BYTES_PER_PIXEL],
+        "sparse output accumulator",
+    )?;
+    estimate.total_bytes = estimate
+        .total_bytes
+        .checked_sub(estimate.horizontal_accumulator_bytes)
+        .and_then(|value| value.checked_sub(estimate.vertical_accumulator_bytes))
+        .and_then(|value| value.checked_add(sparse_accumulator_bytes))
+        .ok_or_else(|| overflow("sparse total working memory"))?;
+    estimate.horizontal_accumulator_bytes = 0;
+    estimate.vertical_accumulator_bytes = 0;
+    estimate.sparse_accumulator_bytes = sparse_accumulator_bytes;
+    Ok(estimate)
 }
 
 fn estimate_encoded_png_bytes(output: Dimensions, rgba_bytes: usize) -> Result<usize> {
@@ -157,6 +193,7 @@ mod tests {
         assert_eq!(estimate.normalized_row_bytes, 4_000);
         assert_eq!(estimate.horizontal_accumulator_bytes, 8_000);
         assert_eq!(estimate.vertical_accumulator_bytes, 8_000);
+        assert_eq!(estimate.sparse_accumulator_bytes, 0);
         assert_eq!(estimate.output_rgba_bytes, 20_000);
         assert_eq!(estimate.encoder_state_bytes, 0);
         assert_eq!(estimate.encoded_output_bytes, 0);
@@ -214,5 +251,29 @@ mod tests {
                 operation: "test sum"
             })
         );
+    }
+
+    #[test]
+    fn sparse_estimate_scales_with_output_area_not_source_area() {
+        let output = Dimensions::new(100, 50).unwrap();
+        let short = estimate_sparse_working_memory_for_output(
+            Dimensions::new(4_000, 1).unwrap(),
+            output,
+            4,
+            OutputFormat::Rgba,
+        )
+        .unwrap();
+        let tall = estimate_sparse_working_memory_for_output(
+            Dimensions::new(4_000, 100_000).unwrap(),
+            output,
+            4,
+            OutputFormat::Rgba,
+        )
+        .unwrap();
+
+        assert_eq!(short, tall);
+        assert_eq!(short.horizontal_accumulator_bytes, 0);
+        assert_eq!(short.vertical_accumulator_bytes, 0);
+        assert_eq!(short.sparse_accumulator_bytes, 100 * 50 * 5 * 16);
     }
 }

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("smoke", "memory")]
+    [ValidateSet("smoke", "memory", "adam7")]
     [string]$Profile = "smoke",
     [int]$MaxDimension = 512
 )

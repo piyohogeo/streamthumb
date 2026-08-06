@@ -19,6 +19,10 @@ linear-memory runner.
 100K x 32, and 32 x 100K gradients. The generator writes one row at a time and
 does not allocate a full source frame.
 
+`adam7` contains a 2,048-square blank image and an 8,192 x 64 gradient. The
+generator writes samples in seven-pass order and retains compressed bytes, not a
+full decoded source frame.
+
 Generated corpora, result files, output thumbnails, temporary files, and WASM
 packages are ignored by Git.
 
@@ -63,7 +67,7 @@ The runner requires `wasm-pack` and Node.js. Its JSON Lines output is written to
 `benchmarks/results/wasm-<profile>.jsonl`.
 
 On Linux, use `./benchmarks/run-wasm.sh smoke 512`. The GitHub `Benchmarks`
-workflow exposes both profiles as a manual action and uploads native and WASM
+workflow exposes all three profiles as a manual action and uploads native and WASM
 JSON Lines files as workflow artifacts.
 
 ## Result schema

@@ -1,6 +1,6 @@
 use crate::{
     Dimensions, Error, LimitKind, MemoryEstimate, Result, ThumbnailOptions, contain_dimensions,
-    estimate_working_memory_for_output,
+    estimate_sparse_working_memory_for_output, estimate_working_memory_for_output,
 };
 
 /// Header-level information needed to plan processing before large allocations.
@@ -29,6 +29,22 @@ pub struct ProcessingPlan {
 
 /// Validates limits and creates a processing plan before decoding begins.
 pub fn plan_thumbnail(input: InputInfo, options: &ThumbnailOptions) -> Result<ProcessingPlan> {
+    plan_thumbnail_with_layout(input, options, false)
+}
+
+/// Creates a processing plan for arbitrary-order sparse source samples.
+pub fn plan_thumbnail_sparse(
+    input: InputInfo,
+    options: &ThumbnailOptions,
+) -> Result<ProcessingPlan> {
+    plan_thumbnail_with_layout(input, options, true)
+}
+
+fn plan_thumbnail_with_layout(
+    input: InputInfo,
+    options: &ThumbnailOptions,
+    sparse: bool,
+) -> Result<ProcessingPlan> {
     validate_non_zero_limits(options)?;
     validate_input(input, options)?;
 
@@ -36,12 +52,21 @@ pub fn plan_thumbnail(input: InputInfo, options: &ThumbnailOptions) -> Result<Pr
     let output = contain_dimensions(input.dimensions, requested_bounds, options.allow_upscale)?;
     validate_output(output, options)?;
 
-    let memory = estimate_working_memory_for_output(
-        input.dimensions,
-        output,
-        input.source_bytes_per_pixel,
-        options.output,
-    )?;
+    let memory = if sparse {
+        estimate_sparse_working_memory_for_output(
+            input.dimensions,
+            output,
+            input.source_bytes_per_pixel,
+            options.output,
+        )?
+    } else {
+        estimate_working_memory_for_output(
+            input.dimensions,
+            output,
+            input.source_bytes_per_pixel,
+            options.output,
+        )?
+    };
     enforce(
         LimitKind::WorkingMemory,
         usize_to_u64(memory.total_bytes)?,

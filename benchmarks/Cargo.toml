@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+flate2 = "1.1.9"
 image = { version = "=0.25.8", default-features = false, features = ["png"] }
 png = "0.18.1"
 streamthumb-core = { path = "../crates/streamthumb-core" }

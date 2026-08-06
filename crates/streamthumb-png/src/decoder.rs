@@ -3,7 +3,7 @@ use std::io::Cursor;
 use png::{BitDepth, ColorType};
 use streamthumb_core::{
     AreaDownsampler, Dimensions, InputInfo, OutputFormat, ProcessingPlan, RgbaImage,
-    ThumbnailOptions, plan_thumbnail,
+    SparseAreaDownsampler, ThumbnailOptions, plan_thumbnail, plan_thumbnail_sparse,
 };
 
 use crate::{Error, Result, ThumbnailOutput, UnsupportedFeature, encoder::encode_rgba_png};
@@ -64,7 +64,8 @@ where
         .read_header_info()
         .map_err(|error| map_decode_error(error, decoder_limit))?;
     let dimensions = Dimensions::new(header.width, header.height)?;
-    validate_header(header.color_type, header.bit_depth, header.interlaced)?;
+    validate_color_depth(header.color_type, header.bit_depth)?;
+    reject_interlacing(header.interlaced)?;
     let source_bytes_per_pixel = bytes_per_pixel(header.color_type)?;
     let plan = plan_thumbnail(
         InputInfo {
@@ -94,7 +95,8 @@ where
         });
     }
     let (output_color, output_depth) = reader.output_color_type();
-    validate_header(output_color, output_depth, reader.info().interlaced)?;
+    validate_color_depth(output_color, output_depth)?;
+    reject_interlacing(reader.info().interlaced)?;
 
     let rgba_row_bytes = usize::try_from(dimensions.width)
         .ok()
@@ -173,6 +175,10 @@ fn thumbnail_png_rgba_planned(
     input: &[u8],
     options: &ThumbnailOptions,
 ) -> Result<(RgbaImage, ProcessingPlan)> {
+    if png_is_interlaced(input, options)? {
+        return thumbnail_png_adam7_rgba_planned(input, options);
+    }
+
     let mut downsampler = None;
     let decoded = decode_png_rows(input, options, |row| {
         if downsampler.is_none() {
@@ -192,13 +198,236 @@ fn thumbnail_png_rgba_planned(
     Ok((image, decoded.plan))
 }
 
-fn validate_header(color: ColorType, depth: BitDepth, interlaced: bool) -> Result<()> {
-    if interlaced {
+fn png_is_interlaced(input: &[u8], options: &ThumbnailOptions) -> Result<bool> {
+    checked_encoded_length(input, options)?;
+    let decoder_limit = options.limits.max_working_memory_bytes;
+    let mut decoder = png::Decoder::new_with_limits(
+        Cursor::new(input),
+        png::Limits {
+            bytes: decoder_limit,
+        },
+    );
+    decoder.set_ignore_text_chunk(true);
+    decoder.set_ignore_iccp_chunk(true);
+    let header = decoder
+        .read_header_info()
+        .map_err(|error| map_decode_error(error, decoder_limit))?;
+    validate_color_depth(header.color_type, header.bit_depth)?;
+    Ok(header.interlaced)
+}
+
+fn thumbnail_png_adam7_rgba_planned(
+    input: &[u8],
+    options: &ThumbnailOptions,
+) -> Result<(RgbaImage, ProcessingPlan)> {
+    let encoded_bytes = checked_encoded_length(input, options)?;
+    let decoder_limit = options.limits.max_working_memory_bytes;
+    let mut decoder = png::Decoder::new_with_limits(
+        Cursor::new(input),
+        png::Limits {
+            bytes: decoder_limit,
+        },
+    );
+    decoder.set_transformations(png::Transformations::IDENTITY);
+    decoder.set_ignore_text_chunk(true);
+    decoder.set_ignore_iccp_chunk(true);
+
+    let header = decoder
+        .read_header_info()
+        .map_err(|error| map_decode_error(error, decoder_limit))?;
+    let dimensions = Dimensions::new(header.width, header.height)?;
+    validate_color_depth(header.color_type, header.bit_depth)?;
+    if !header.interlaced {
+        return Err(Error::DecodeFailure(
+            "Adam7 path received a non-interlaced PNG".to_owned(),
+        ));
+    }
+    let source_bytes_per_pixel = bytes_per_pixel(header.color_type)?;
+    let plan = plan_thumbnail_sparse(
+        InputInfo {
+            dimensions,
+            encoded_bytes,
+            source_bytes_per_pixel,
+        },
+        options,
+    )?;
+    decoder.set_limits(png::Limits {
+        bytes: plan
+            .memory
+            .decoder_rows_bytes
+            .checked_add(plan.memory.decoder_staging_bytes)
+            .ok_or(streamthumb_core::Error::IntegerOverflow {
+                operation: "Adam7 PNG decoder allowance",
+            })?,
+    });
+
+    let mut reader = decoder
+        .read_info()
+        .map_err(|error| map_decode_error(error, decoder_limit))?;
+    if reader.info().is_animated() {
         return Err(Error::Unsupported {
-            feature: UnsupportedFeature::Interlacing,
-            detail: "Adam7 support is deferred",
+            feature: UnsupportedFeature::Animation,
+            detail: "APNG is not supported",
         });
     }
+    let (output_color, output_depth) = reader.output_color_type();
+    validate_color_depth(output_color, output_depth)?;
+    if !reader.info().interlaced {
+        return Err(Error::DecodeFailure(
+            "PNG interlace mode changed after header validation".to_owned(),
+        ));
+    }
+
+    let mut downsampler = SparseAreaDownsampler::new(plan.source, plan.output)?;
+    let sample_bytes = usize::from(source_bytes_per_pixel);
+    for pass in ADAM7_PASSES {
+        let samples = pass_sample_count(dimensions.width, pass.x_offset, pass.x_stride);
+        let lines = pass_sample_count(dimensions.height, pass.y_offset, pass.y_stride);
+        if samples == 0 || lines == 0 {
+            continue;
+        }
+        for line in 0..lines {
+            let row = reader
+                .next_interlaced_row()
+                .map_err(|error| map_decode_error(error, decoder_limit))?
+                .ok_or(Error::TruncatedInput)?;
+            if !matches!(row.interlace(), png::InterlaceInfo::Adam7(_)) {
+                return Err(Error::DecodeFailure(
+                    "PNG decoder returned a non-Adam7 row for interlaced input".to_owned(),
+                ));
+            }
+            let expected_bytes = usize::try_from(samples)
+                .ok()
+                .and_then(|count| count.checked_mul(sample_bytes))
+                .ok_or(streamthumb_core::Error::IntegerOverflow {
+                    operation: "Adam7 pass row byte count",
+                })?;
+            if row.data().len() != expected_bytes {
+                return Err(Error::DecodeFailure(format!(
+                    "Adam7 pass row has {} bytes; expected {expected_bytes}",
+                    row.data().len()
+                )));
+            }
+            let y = pass
+                .y_offset
+                .checked_add(line.checked_mul(pass.y_stride).ok_or(
+                    streamthumb_core::Error::IntegerOverflow {
+                        operation: "Adam7 source y coordinate",
+                    },
+                )?)
+                .ok_or(streamthumb_core::Error::IntegerOverflow {
+                    operation: "Adam7 source y coordinate",
+                })?;
+            for (sample, source) in row.data().chunks_exact(sample_bytes).enumerate() {
+                let sample = u32::try_from(sample).map_err(|_| {
+                    streamthumb_core::Error::IntegerOverflow {
+                        operation: "Adam7 sample index conversion",
+                    }
+                })?;
+                let x = pass
+                    .x_offset
+                    .checked_add(sample.checked_mul(pass.x_stride).ok_or(
+                        streamthumb_core::Error::IntegerOverflow {
+                            operation: "Adam7 source x coordinate",
+                        },
+                    )?)
+                    .ok_or(streamthumb_core::Error::IntegerOverflow {
+                        operation: "Adam7 source x coordinate",
+                    })?;
+                downsampler.push_pixel(x, y, normalize_pixel(source, output_color)?)?;
+            }
+        }
+    }
+
+    if reader
+        .next_interlaced_row()
+        .map_err(|error| map_decode_error(error, decoder_limit))?
+        .is_some()
+    {
+        return Err(Error::DecodeFailure(
+            "PNG decoder returned more Adam7 rows than expected".to_owned(),
+        ));
+    }
+    reader
+        .finish()
+        .map_err(|error| map_decode_error(error, decoder_limit))?;
+    Ok((downsampler.finish()?, plan))
+}
+
+#[derive(Clone, Copy)]
+struct Adam7Pass {
+    x_stride: u32,
+    x_offset: u32,
+    y_stride: u32,
+    y_offset: u32,
+}
+
+const ADAM7_PASSES: [Adam7Pass; 7] = [
+    Adam7Pass {
+        x_stride: 8,
+        x_offset: 0,
+        y_stride: 8,
+        y_offset: 0,
+    },
+    Adam7Pass {
+        x_stride: 8,
+        x_offset: 4,
+        y_stride: 8,
+        y_offset: 0,
+    },
+    Adam7Pass {
+        x_stride: 4,
+        x_offset: 0,
+        y_stride: 8,
+        y_offset: 4,
+    },
+    Adam7Pass {
+        x_stride: 4,
+        x_offset: 2,
+        y_stride: 4,
+        y_offset: 0,
+    },
+    Adam7Pass {
+        x_stride: 2,
+        x_offset: 0,
+        y_stride: 4,
+        y_offset: 2,
+    },
+    Adam7Pass {
+        x_stride: 2,
+        x_offset: 1,
+        y_stride: 2,
+        y_offset: 0,
+    },
+    Adam7Pass {
+        x_stride: 1,
+        x_offset: 0,
+        y_stride: 2,
+        y_offset: 1,
+    },
+];
+
+fn pass_sample_count(length: u32, offset: u32, stride: u32) -> u32 {
+    length.saturating_sub(offset).div_ceil(stride)
+}
+
+fn checked_encoded_length(input: &[u8], options: &ThumbnailOptions) -> Result<u64> {
+    let encoded_bytes =
+        u64::try_from(input.len()).map_err(|_| streamthumb_core::Error::IntegerOverflow {
+            operation: "encoded input length conversion",
+        })?;
+    if encoded_bytes > options.limits.max_input_bytes {
+        return Err(streamthumb_core::Error::LimitExceeded {
+            kind: streamthumb_core::LimitKind::InputBytes,
+            actual: encoded_bytes,
+            limit: options.limits.max_input_bytes,
+        }
+        .into());
+    }
+    Ok(encoded_bytes)
+}
+
+fn validate_color_depth(color: ColorType, depth: BitDepth) -> Result<()> {
     if depth != BitDepth::Eight {
         return Err(Error::Unsupported {
             feature: UnsupportedFeature::BitDepth,
@@ -209,6 +438,16 @@ fn validate_header(color: ColorType, depth: BitDepth, interlaced: bool) -> Resul
         return Err(Error::Unsupported {
             feature: UnsupportedFeature::ColorType,
             detail: "only RGB and RGBA are supported",
+        });
+    }
+    Ok(())
+}
+
+fn reject_interlacing(interlaced: bool) -> Result<()> {
+    if interlaced {
+        return Err(Error::Unsupported {
+            feature: UnsupportedFeature::Interlacing,
+            detail: "row callbacks require non-interlaced input; use thumbnail_png for Adam7",
         });
     }
     Ok(())
@@ -267,6 +506,21 @@ fn normalize_row(source: &[u8], color: ColorType, destination: &mut [u8]) -> Res
     Ok(())
 }
 
+fn normalize_pixel(source: &[u8], color: ColorType) -> Result<[u8; 4]> {
+    match color {
+        ColorType::Rgb if source.len() == 3 => Ok([source[0], source[1], source[2], 255]),
+        ColorType::Rgba if source.len() == 4 => Ok([source[0], source[1], source[2], source[3]]),
+        ColorType::Rgb | ColorType::Rgba => Err(Error::DecodeFailure(format!(
+            "decoded Adam7 sample has {} bytes",
+            source.len()
+        ))),
+        _ => Err(Error::Unsupported {
+            feature: UnsupportedFeature::ColorType,
+            detail: "only RGB and RGBA are supported",
+        }),
+    }
+}
+
 fn map_decode_error(error: png::DecodingError, decoder_limit: usize) -> Error {
     match error {
         png::DecodingError::IoError(io_error)
@@ -284,7 +538,9 @@ fn map_decode_error(error: png::DecodingError, decoder_limit: usize) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{Compression, write::ZlibEncoder};
     use png::Filter;
+    use std::io::Write;
     use streamthumb_core::{Error as CoreError, LimitKind};
 
     fn encode_png(
@@ -304,6 +560,62 @@ mod tests {
         writer.write_image_data(pixels).unwrap();
         writer.finish().unwrap();
         encoded
+    }
+
+    fn encode_adam7_png(width: u32, height: u32, color: ColorType, pixels: &[u8]) -> Vec<u8> {
+        let sample_bytes = match color {
+            ColorType::Rgb => 3_usize,
+            ColorType::Rgba => 4_usize,
+            _ => panic!("test helper supports only RGB and RGBA"),
+        };
+        let mut filtered = Vec::new();
+        for pass in ADAM7_PASSES {
+            let samples = pass_sample_count(width, pass.x_offset, pass.x_stride);
+            let lines = pass_sample_count(height, pass.y_offset, pass.y_stride);
+            if samples == 0 || lines == 0 {
+                continue;
+            }
+            for line in 0..lines {
+                filtered.push(0);
+                let y = pass.y_offset + line * pass.y_stride;
+                for sample in 0..samples {
+                    let x = pass.x_offset + sample * pass.x_stride;
+                    let offset = usize::try_from(
+                        (u64::from(y) * u64::from(width) + u64::from(x))
+                            * u64::try_from(sample_bytes).unwrap(),
+                    )
+                    .unwrap();
+                    filtered.extend_from_slice(&pixels[offset..offset + sample_bytes]);
+                }
+            }
+        }
+
+        let mut compressor = ZlibEncoder::new(Vec::new(), Compression::default());
+        compressor.write_all(&filtered).unwrap();
+        let compressed = compressor.finish().unwrap();
+        let mut encoded = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.push(8);
+        ihdr.push(match color {
+            ColorType::Rgb => 2,
+            ColorType::Rgba => 6,
+            _ => unreachable!(),
+        });
+        ihdr.extend_from_slice(&[0, 0, 1]);
+        append_chunk(&mut encoded, *b"IHDR", &ihdr);
+        append_chunk(&mut encoded, *b"IDAT", &compressed);
+        append_chunk(&mut encoded, *b"IEND", &[]);
+        encoded
+    }
+
+    fn append_chunk(png: &mut Vec<u8>, chunk_type: [u8; 4], data: &[u8]) {
+        png.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+        png.extend_from_slice(&chunk_type);
+        png.extend_from_slice(data);
+        let start = png.len() - data.len() - 4;
+        png.extend_from_slice(&crc32(&png[start..]).to_be_bytes());
     }
 
     fn default_options() -> ThumbnailOptions {
@@ -338,6 +650,121 @@ mod tests {
         assert_eq!(rows[0], (0, vec![1, 2, 3, 255, 4, 5, 6, 255]));
         assert_eq!(rows[1], (1, vec![7, 8, 9, 255, 10, 11, 12, 255]));
         assert_eq!(rows[2], (2, vec![13, 14, 15, 255, 16, 17, 18, 255]));
+    }
+
+    #[test]
+    fn adam7_rgb_and_rgba_match_non_interlaced_thumbnails() {
+        for color in [ColorType::Rgb, ColorType::Rgba] {
+            let sample_bytes = if color == ColorType::Rgb { 3 } else { 4 };
+            let width = 11_u32;
+            let height = 9_u32;
+            let mut pixels = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    pixels.extend_from_slice(&[
+                        u8::try_from((x * 31 + y * 7) % 256).unwrap(),
+                        u8::try_from((x * 11 + y * 43) % 256).unwrap(),
+                        u8::try_from((x * 53 + y * 3) % 256).unwrap(),
+                    ]);
+                    if sample_bytes == 4 {
+                        pixels.push(u8::try_from((x * 29 + y * 47) % 256).unwrap());
+                    }
+                }
+            }
+            let adam7 = encode_adam7_png(width, height, color, &pixels);
+            let sequential = encode_png(
+                width,
+                height,
+                color,
+                BitDepth::Eight,
+                Filter::Paeth,
+                &pixels,
+            );
+            let mut options = default_options();
+            options.max_width = 5;
+            options.max_height = 4;
+
+            assert_eq!(
+                thumbnail_png_rgba(&adam7, &options).unwrap(),
+                thumbnail_png_rgba(&sequential, &options).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn adam7_handles_small_dimensions_and_empty_passes() {
+        for height in 1..=9_u32 {
+            for width in 1..=9_u32 {
+                let pixels = (0..width * height)
+                    .flat_map(|index| {
+                        let value = u8::try_from(index % 251).unwrap();
+                        [value, value.wrapping_add(1), value.wrapping_add(2), 255]
+                    })
+                    .collect::<Vec<_>>();
+                let adam7 = encode_adam7_png(width, height, ColorType::Rgba, &pixels);
+                let sequential = encode_png(
+                    width,
+                    height,
+                    ColorType::Rgba,
+                    BitDepth::Eight,
+                    Filter::NoFilter,
+                    &pixels,
+                );
+                let mut options = default_options();
+                options.max_width = 3;
+                options.max_height = 3;
+                assert_eq!(
+                    thumbnail_png_rgba(&adam7, &options).unwrap(),
+                    thumbnail_png_rgba(&sequential, &options).unwrap(),
+                    "Adam7 mismatch for {width}x{height}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adam7_enforces_sparse_memory_plan_before_decoding() {
+        let width = 64;
+        let height = 64;
+        let encoded = encode_adam7_png(
+            width,
+            height,
+            ColorType::Rgba,
+            &vec![128; width as usize * height as usize * 4],
+        );
+        let mut options = default_options();
+        options.max_width = width;
+        options.max_height = height;
+        options.output = OutputFormat::Rgba;
+        let encoded_bytes = u64::try_from(encoded.len()).unwrap();
+        let required = plan_thumbnail_sparse(
+            InputInfo {
+                dimensions: Dimensions::new(width, height).unwrap(),
+                encoded_bytes,
+                source_bytes_per_pixel: 4,
+            },
+            &options,
+        )
+        .unwrap()
+        .memory
+        .total_bytes;
+        options.limits.max_working_memory_bytes = required - 1;
+
+        assert!(matches!(
+            thumbnail_png_rgba(&encoded, &options).unwrap_err(),
+            Error::Core(CoreError::LimitExceeded {
+                kind: LimitKind::WorkingMemory,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn adam7_truncation_fails_without_panicking() {
+        let pixels = vec![42; 17 * 13 * 4];
+        let mut encoded = encode_adam7_png(17, 13, ColorType::Rgba, &pixels);
+        encoded.truncate(encoded.len() - 20);
+        assert!(thumbnail_png_rgba(&encoded, &default_options()).is_err());
     }
 
     #[test]

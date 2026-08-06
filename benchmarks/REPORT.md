@@ -41,6 +41,23 @@ All smoke cases remained below the initial aspirational 32 MiB WASM target. A
 fresh Node process and WebAssembly instance were used for every row so retained
 pages from one case could not affect another case.
 
+## Adam7 results
+
+| Input | Method | Runtime | Peak RSS / WASM high-water | Output |
+| --- | --- | ---: | ---: | ---: |
+| Adam7 2,048 x 2,048 blank | streamthumb native | 116.8 ms | 27.5 MiB RSS | 2.1 KiB |
+| Adam7 2,048 x 2,048 blank | image-rs | 60.6 ms | 40.2 MiB RSS | 6.1 KiB |
+| Adam7 2,048 x 2,048 blank | streamthumb WASM | 280.0 ms | 22.75 MiB linear | 2.1 KiB |
+| Adam7 8,192 x 64 gradient | streamthumb native | 15.0 ms | 7.8 MiB RSS | 287 B |
+| Adam7 8,192 x 64 gradient | image-rs | 7.0 ms | 4.7 MiB RSS | 1.6 KiB |
+| Adam7 8,192 x 64 gradient | streamthumb WASM | 37.4 ms | 1.94 MiB linear | 287 B |
+
+Adam7 uses one exact `u128` accumulator per bounded output pixel so it can
+consume sparse pass samples without retaining the source frame. The 512-square
+case therefore uses more memory than the ordered-row path, but remains below the
+32 MiB WASM target. The wide, short case confirms that the accumulator scales
+with output area rather than source area.
+
 ## Interpretation and limitations
 
 - Native Peak RSS on Windows is sampled every millisecond and can under-report

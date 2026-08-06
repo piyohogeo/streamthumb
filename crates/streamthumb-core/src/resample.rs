@@ -31,6 +31,153 @@ pub struct AreaDownsampler {
     output_pixels: Vec<u8>,
 }
 
+/// An exact area downsampler that accepts source pixels in arbitrary order.
+///
+/// This representation is intended for sparse interlace passes. Memory use is
+/// proportional to the bounded output area and does not depend on source area.
+#[derive(Debug)]
+pub struct SparseAreaDownsampler {
+    source: Dimensions,
+    output: Dimensions,
+    samples_received: u64,
+    accumulators: Vec<Accumulator>,
+}
+
+impl SparseAreaDownsampler {
+    /// Creates a sparse downsampler for fixed source and output dimensions.
+    pub fn new(source: Dimensions, output: Dimensions) -> Result<Self> {
+        let output_pixels = usize::try_from(output.pixels()?)
+            .map_err(|_| overflow("sparse output pixel count conversion"))?;
+        Ok(Self {
+            source,
+            output,
+            samples_received: 0,
+            accumulators: allocate_accumulators(output_pixels)?,
+        })
+    }
+
+    /// Adds one normalized straight-alpha RGBA8 source pixel.
+    pub fn push_pixel(&mut self, x: u32, y: u32, pixel: [u8; 4]) -> Result<()> {
+        if x >= self.source.width || y >= self.source.height {
+            return Err(Error::InvalidPixelCoordinate { x, y });
+        }
+
+        let source_width = u64::from(self.source.width);
+        let source_height = u64::from(self.source.height);
+        let output_width = u64::from(self.output.width);
+        let output_height = u64::from(self.output.height);
+        let source_x_start = u64::from(x)
+            .checked_mul(output_width)
+            .ok_or_else(|| overflow("sparse horizontal source interval"))?;
+        let source_x_end = source_x_start
+            .checked_add(output_width)
+            .ok_or_else(|| overflow("sparse horizontal source interval"))?;
+        let source_y_start = u64::from(y)
+            .checked_mul(output_height)
+            .ok_or_else(|| overflow("sparse vertical source interval"))?;
+        let source_y_end = source_y_start
+            .checked_add(output_height)
+            .ok_or_else(|| overflow("sparse vertical source interval"))?;
+        let first_output_x = source_x_start / source_width;
+        let last_output_x = div_ceil(source_x_end, source_width)?;
+        let first_output_y = source_y_start / source_height;
+        let last_output_y = div_ceil(source_y_end, source_height)?;
+        let red = u128::from(pixel[0]);
+        let green = u128::from(pixel[1]);
+        let blue = u128::from(pixel[2]);
+        let alpha = u128::from(pixel[3]);
+
+        for output_y in first_output_y..last_output_y {
+            let output_y_start = output_y
+                .checked_mul(source_height)
+                .ok_or_else(|| overflow("sparse vertical output interval"))?;
+            let output_y_end = output_y_start
+                .checked_add(source_height)
+                .ok_or_else(|| overflow("sparse vertical output interval"))?;
+            let y_overlap =
+                interval_overlap(source_y_start, source_y_end, output_y_start, output_y_end);
+            for output_x in first_output_x..last_output_x {
+                let output_x_start = output_x
+                    .checked_mul(source_width)
+                    .ok_or_else(|| overflow("sparse horizontal output interval"))?;
+                let output_x_end = output_x_start
+                    .checked_add(source_width)
+                    .ok_or_else(|| overflow("sparse horizontal output interval"))?;
+                let x_overlap =
+                    interval_overlap(source_x_start, source_x_end, output_x_start, output_x_end);
+                let weight = u128::from(x_overlap) * u128::from(y_overlap);
+                if weight == 0 {
+                    continue;
+                }
+                let index = output_y
+                    .checked_mul(output_width)
+                    .and_then(|row| row.checked_add(output_x))
+                    .ok_or_else(|| overflow("sparse output pixel index"))?;
+                let accumulator = &mut self.accumulators[usize::try_from(index)
+                    .map_err(|_| overflow("sparse output index conversion"))?];
+                accumulator.red += red * alpha * weight;
+                accumulator.green += green * alpha * weight;
+                accumulator.blue += blue * alpha * weight;
+                accumulator.alpha += alpha * weight;
+                accumulator.weight += weight;
+            }
+        }
+
+        self.samples_received = self
+            .samples_received
+            .checked_add(1)
+            .ok_or_else(|| overflow("sparse sample count"))?;
+        Ok(())
+    }
+
+    /// Completes the thumbnail after every source pixel has been supplied.
+    pub fn finish(self) -> Result<RgbaImage> {
+        let expected_samples = self.source.pixels()?;
+        if self.samples_received != expected_samples {
+            return Err(Error::IncompleteSamples {
+                expected: expected_samples,
+                actual: self.samples_received,
+            });
+        }
+
+        let output_bytes = usize::try_from(self.output.pixels()?)
+            .map_err(|_| overflow("sparse output byte count conversion"))?
+            .checked_mul(4)
+            .ok_or_else(|| overflow("sparse output RGBA byte count"))?;
+        let mut pixels = allocate_bytes(output_bytes)?;
+        let expected_weight = u128::from(self.source.width) * u128::from(self.source.height);
+        for (index, accumulator) in self.accumulators.iter().enumerate() {
+            if accumulator.weight != expected_weight {
+                let output_width = usize::try_from(self.output.width)
+                    .map_err(|_| overflow("sparse output width conversion"))?;
+                return Err(Error::InvalidCoverage {
+                    x: u32::try_from(index % output_width)
+                        .map_err(|_| overflow("sparse coverage x conversion"))?,
+                    y: u32::try_from(index / output_width)
+                        .map_err(|_| overflow("sparse coverage y conversion"))?,
+                    expected: expected_weight,
+                    actual: accumulator.weight,
+                });
+            }
+            let alpha = rounded_div(accumulator.alpha, accumulator.weight)?;
+            let (red, green, blue) = if accumulator.alpha == 0 {
+                (0, 0, 0)
+            } else {
+                (
+                    rounded_div(accumulator.red, accumulator.alpha)?,
+                    rounded_div(accumulator.green, accumulator.alpha)?,
+                    rounded_div(accumulator.blue, accumulator.alpha)?,
+                )
+            };
+            pixels.extend_from_slice(&[to_u8(red)?, to_u8(green)?, to_u8(blue)?, to_u8(alpha)?]);
+        }
+        Ok(RgbaImage {
+            dimensions: self.output,
+            pixels,
+        })
+    }
+}
+
 impl AreaDownsampler {
     /// Creates an area downsampler for fixed source and output dimensions.
     pub fn new(source: Dimensions, output: Dimensions) -> Result<Self> {
@@ -293,6 +440,21 @@ mod tests {
         downsampler.finish().unwrap()
     }
 
+    fn resize_sparse(source: Dimensions, output: Dimensions, pixels: &[u8]) -> RgbaImage {
+        let mut downsampler = SparseAreaDownsampler::new(source, output).unwrap();
+        for y in (0..source.height).rev() {
+            for x in (0..source.width).rev() {
+                let offset =
+                    usize::try_from((u64::from(y) * u64::from(source.width) + u64::from(x)) * 4)
+                        .unwrap();
+                downsampler
+                    .push_pixel(x, y, pixels[offset..offset + 4].try_into().unwrap())
+                    .unwrap();
+            }
+        }
+        downsampler.finish().unwrap()
+    }
+
     #[test]
     fn averages_an_opaque_two_by_two_image() {
         let image = resize(
@@ -420,6 +582,53 @@ mod tests {
             Err(Error::IncompleteImage {
                 expected_rows: 2,
                 actual_rows: 0
+            })
+        );
+    }
+
+    #[test]
+    fn sparse_accumulation_matches_ordered_rows_for_arbitrary_ratios() {
+        let source = Dimensions::new(7, 5).unwrap();
+        let mut pixels = Vec::new();
+        for y in 0..source.height {
+            for x in 0..source.width {
+                pixels.extend_from_slice(&[
+                    u8::try_from((x * 31 + y * 7) % 256).unwrap(),
+                    u8::try_from((x * 11 + y * 43) % 256).unwrap(),
+                    u8::try_from((x * 53 + y * 3) % 256).unwrap(),
+                    u8::try_from((x * 29 + y * 47) % 256).unwrap(),
+                ]);
+            }
+        }
+
+        for output in [
+            Dimensions::new(3, 2).unwrap(),
+            Dimensions::new(4, 3).unwrap(),
+            Dimensions::new(1, 1).unwrap(),
+            Dimensions::new(9, 6).unwrap(),
+        ] {
+            assert_eq!(
+                resize_sparse(source, output, &pixels),
+                resize(source, output, &pixels)
+            );
+        }
+    }
+
+    #[test]
+    fn sparse_accumulation_rejects_invalid_coordinates_and_missing_samples() {
+        let source = Dimensions::new(2, 1).unwrap();
+        let output = Dimensions::new(1, 1).unwrap();
+        let mut downsampler = SparseAreaDownsampler::new(source, output).unwrap();
+        assert_eq!(
+            downsampler.push_pixel(2, 0, [0; 4]),
+            Err(Error::InvalidPixelCoordinate { x: 2, y: 0 })
+        );
+        downsampler.push_pixel(0, 0, [1, 2, 3, 4]).unwrap();
+        assert_eq!(
+            downsampler.finish(),
+            Err(Error::IncompleteSamples {
+                expected: 2,
+                actual: 1
             })
         );
     }

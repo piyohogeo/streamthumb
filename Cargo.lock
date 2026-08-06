@@ -176,6 +176,7 @@ version = "0.1.0"
 name = "streamthumb-png"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "png",
  "streamthumb-core",
 ]

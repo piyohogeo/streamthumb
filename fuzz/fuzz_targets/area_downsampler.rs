@@ -3,7 +3,7 @@
 use std::hint::black_box;
 
 use libfuzzer_sys::fuzz_target;
-use streamthumb_core::{AreaDownsampler, Dimensions};
+use streamthumb_core::{AreaDownsampler, Dimensions, SparseAreaDownsampler};
 
 fuzz_target!(|data: &[u8]| {
     if data.len() < 4 {
@@ -20,6 +20,9 @@ fuzz_target!(|data: &[u8]| {
     let Ok(mut downsampler) = AreaDownsampler::new(source, output) else {
         return;
     };
+    let Ok(mut sparse) = SparseAreaDownsampler::new(source, output) else {
+        return;
+    };
 
     let row_len = source.width as usize * 4;
     let mut row = vec![0_u8; row_len];
@@ -33,6 +36,18 @@ fuzz_target!(|data: &[u8]| {
         if downsampler.push_row(y, &row).is_err() {
             return;
         }
+        for x in (0..source.width).rev() {
+            let offset = x as usize * 4;
+            let Ok(pixel) = row[offset..offset + 4].try_into() else {
+                return;
+            };
+            if sparse.push_pixel(x, y, pixel).is_err() {
+                return;
+            }
+        }
     }
-    let _ = black_box(downsampler.finish());
+    let ordered = downsampler.finish();
+    let arbitrary = sparse.finish();
+    assert_eq!(ordered, arbitrary);
+    let _ = black_box(ordered);
 });
