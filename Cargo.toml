@@ -6,13 +6,13 @@ members = [
     "crates/streamthumb-wasm",
 ]
 resolver = "2"
-exclude = ["fuzz"]
+exclude = ["benchmarks", "fuzz"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/streamthumb/streamthumb"
+repository = "https://github.com/piyohogeo/streamthumb"
 rust-version = "1.85"
 
 [workspace.lints.rust]

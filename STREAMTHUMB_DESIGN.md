@@ -1094,3 +1094,14 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 6. Regression tests cover pixel bombs declared in IHDR, oversized truncated ancillary chunks, highly compressible inputs, early callback suppression, input byte limits, memory limits, APNG, Adam7, truncation, and all five PNG row filters.
 7. The memory budget excludes caller-owned encoded input, JavaScript memory outside WebAssembly, allocator bookkeeping, runtime code pages, and unrelated process memory. These exclusions are documented as part of the security contract.
 8. CPU use is bounded indirectly by byte, dimension, and pixel limits. A wall-clock deadline and explicit decoded-sample work budget remain future work and must currently be enforced by the host runtime.
+
+### Phase 7 decisions
+
+1. Benchmark-only code lives in an excluded `benchmarks` package, so image-rs and measurement tooling do not enter the production dependency graph.
+2. The corpus generator writes PNG rows incrementally. The smoke profile covers square, wide, tall, compressible, gradient, and high-entropy inputs; the memory profile covers the design's 8K, 16K, 100K x 32, and 32 x 100K cases.
+3. Native comparisons execute each method in a fresh process. Windows samples Peak Working Set every millisecond, while Linux uses GNU `time` maximum resident set size.
+4. The image-rs baseline deliberately performs a full RGBA decode, Triangle resize, and PNG encode. It measures the cost of a conventional full-frame pipeline but is not a pixel-equivalent filter comparison.
+5. The WASM binding exposes the current linear-memory byte length for measurement. Each benchmark case uses a fresh Node process and WASM instance, making the post-operation value a per-case linear-memory high-water mark.
+6. WASM linear-memory results include allocator-retained pages and the copied encoded input. Node heap and other JavaScript allocations are reported separately through process RSS and are outside the linear-memory value.
+7. The first local smoke baseline shows a 7.9 MiB streamthumb Peak RSS versus 36.9 MiB for image-rs on a 2,048-square blank source. All measured WASM smoke cases remain at or below 4 MiB linear memory.
+8. jSquash, wasm-image-optimization, and wasm-vips remain future benchmark adapters. Comparisons will pin distributable artifacts and equivalent settings rather than adding them to production dependencies.

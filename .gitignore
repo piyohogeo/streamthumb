@@ -3,4 +3,9 @@
 /fuzz/target/
 /fuzz/artifacts/
 /fuzz/coverage/
+/benchmarks/corpus/
+/benchmarks/results/
+/benchmarks/target/
+/benchmarks/tmp/
+/benchmarks/wasm-pkg/
 **/*.rs.bk

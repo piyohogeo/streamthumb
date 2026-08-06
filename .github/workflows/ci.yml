@@ -28,3 +28,13 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo check -p streamthumb-wasm --target wasm32-unknown-unknown
 
+  benchmark-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --manifest-path benchmarks/Cargo.toml --check
+      - run: cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
+      - run: node --check benchmarks/run-wasm.cjs

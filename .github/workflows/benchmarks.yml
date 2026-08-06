@@ -1,0 +1,42 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Corpus profile
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - memory
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bash benchmarks/run-native.sh "${{ inputs.profile }}" 512
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ inputs.profile }}
+          path: benchmarks/results/native-${{ inputs.profile }}.jsonl
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@wasm-pack
+      - run: bash benchmarks/run-wasm.sh "${{ inputs.profile }}" 512
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-${{ inputs.profile }}
+          path: benchmarks/results/wasm-${{ inputs.profile }}.jsonl

@@ -53,6 +53,14 @@ Fuzz targets for row decoding, the fused thumbnail path, and the area downsample
 cargo +nightly fuzz build
 ```
 
+## Benchmarks
+
+The reproducible benchmark package generates deterministic PNG corpora, compares
+the streaming pipeline with a full-frame image-rs path, measures native Peak
+RSS, and records WebAssembly linear-memory high-water marks. See
+[benchmarks/README.md](benchmarks/README.md) for commands and
+[benchmarks/REPORT.md](benchmarks/REPORT.md) for the initial baseline.
+
 ## License
 
 Licensed under either of Apache License, Version 2.0 or the MIT license, at your option.

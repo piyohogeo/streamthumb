@@ -1,0 +1,19 @@
+[package]
+name = "streamthumb-benchmarks"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+image = { version = "=0.25.8", default-features = false, features = ["png"] }
+png = "0.18.1"
+streamthumb-core = { path = "../crates/streamthumb-core" }
+streamthumb-png = { path = "../crates/streamthumb-png" }
+
+[workspace]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

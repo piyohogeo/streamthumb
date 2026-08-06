@@ -3,12 +3,26 @@
 use js_sys::Reflect;
 use streamthumb_core::{Filter, Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{ThumbnailOutput, thumbnail_png as create_thumbnail};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 /// Returns the package version for bootstrap and packaging checks.
 #[wasm_bindgen(js_name = streamthumbVersion)]
 pub fn streamthumb_version() -> String {
     env!("CARGO_PKG_VERSION").to_owned()
+}
+
+/// Returns the current WebAssembly linear-memory size in bytes.
+///
+/// WebAssembly memory only grows, so sampling this after a benchmark operation
+/// reports the process-local linear-memory high-water mark.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = wasmMemoryBytes)]
+pub fn wasm_memory_bytes() -> u32 {
+    let memory = wasm_bindgen::memory().unchecked_into::<js_sys::WebAssembly::Memory>();
+    let buffer = memory.buffer().unchecked_into::<js_sys::ArrayBuffer>();
+    buffer.byte_length()
 }
 
 /// Creates a bounded PNG or RGBA thumbnail from encoded PNG bytes.
