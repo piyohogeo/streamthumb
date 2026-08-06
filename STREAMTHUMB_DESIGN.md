@@ -1116,3 +1116,13 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 6. Differential tests generate valid Adam7 data independently and compare RGB and RGBA thumbnails with the existing non-interlaced path. Exhaustive dimensions from 1 through 9 cover empty and partial passes.
 7. Adam7-specific tests cover truncation and rejection before decoding when the sparse memory plan exceeds the caller's budget.
 8. The benchmark package adds an `adam7` profile. A 2,048-square source measured 27.5 MiB native Peak RSS and 22.75 MiB WASM linear memory for a 512-square output, without a source-frame allocation.
+
+### Phase 9 decisions
+
+1. The first input-format expansion accepts 8-bit grayscale and grayscale-alpha PNGs in both non-interlaced and Adam7 forms.
+2. Grayscale samples are normalized by copying the gray value into all three RGB channels. Grayscale-alpha samples preserve their alpha value, so the existing premultiplied-alpha area filter applies without a separate path.
+3. Normalization remains stream-local: one decoded row for non-interlaced input and one sparse pass sample at a time for Adam7. No source-area RGBA buffer is introduced.
+4. Decoder transformations remain set to identity. The supported contract is explicit and does not depend on implicit codec color conversion.
+5. The memory planner uses one source byte per grayscale pixel and two per grayscale-alpha pixel while retaining the same bounded RGBA normalization and output allowances.
+6. Separate `tRNS` transparency on grayscale or RGB input is rejected before rows are exposed because identity decoding does not expand it. Callers must use grayscale-alpha or RGBA until explicit `tRNS` support is implemented.
+7. Tests cover row normalization, grayscale-alpha transparency, Adam7 equivalence with non-interlaced input, truncated grayscale-alpha Adam7 data, and early `tRNS` rejection. Palette and 16-bit inputs remain deferred.

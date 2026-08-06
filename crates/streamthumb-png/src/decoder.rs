@@ -94,6 +94,7 @@ where
             detail: "APNG is not supported",
         });
     }
+    reject_separate_transparency(reader.info().trns.is_some())?;
     let (output_color, output_depth) = reader.output_color_type();
     validate_color_depth(output_color, output_depth)?;
     reject_interlacing(reader.info().interlaced)?;
@@ -270,6 +271,7 @@ fn thumbnail_png_adam7_rgba_planned(
             detail: "APNG is not supported",
         });
     }
+    reject_separate_transparency(reader.info().trns.is_some())?;
     let (output_color, output_depth) = reader.output_color_type();
     validate_color_depth(output_color, output_depth)?;
     if !reader.info().interlaced {
@@ -434,10 +436,13 @@ fn validate_color_depth(color: ColorType, depth: BitDepth) -> Result<()> {
             detail: "only 8-bit samples are supported",
         });
     }
-    if !matches!(color, ColorType::Rgb | ColorType::Rgba) {
+    if !matches!(
+        color,
+        ColorType::Grayscale | ColorType::GrayscaleAlpha | ColorType::Rgb | ColorType::Rgba
+    ) {
         return Err(Error::Unsupported {
             feature: UnsupportedFeature::ColorType,
-            detail: "only RGB and RGBA are supported",
+            detail: "only grayscale, grayscale-alpha, RGB, and RGBA are supported",
         });
     }
     Ok(())
@@ -453,25 +458,39 @@ fn reject_interlacing(interlaced: bool) -> Result<()> {
     Ok(())
 }
 
+fn reject_separate_transparency(has_transparency: bool) -> Result<()> {
+    if has_transparency {
+        return Err(Error::Unsupported {
+            feature: UnsupportedFeature::ColorType,
+            detail: "tRNS transparency is not supported; use an alpha color type",
+        });
+    }
+    Ok(())
+}
+
 fn bytes_per_pixel(color: ColorType) -> Result<u8> {
     match color {
+        ColorType::Grayscale => Ok(1),
+        ColorType::GrayscaleAlpha => Ok(2),
         ColorType::Rgb => Ok(3),
         ColorType::Rgba => Ok(4),
         _ => Err(Error::Unsupported {
             feature: UnsupportedFeature::ColorType,
-            detail: "only RGB and RGBA are supported",
+            detail: "only grayscale, grayscale-alpha, RGB, and RGBA are supported",
         }),
     }
 }
 
 fn normalize_row(source: &[u8], color: ColorType, destination: &mut [u8]) -> Result<()> {
     let samples = match color {
+        ColorType::Grayscale => 1,
+        ColorType::GrayscaleAlpha => 2,
         ColorType::Rgb => 3,
         ColorType::Rgba => 4,
         _ => {
             return Err(Error::Unsupported {
                 feature: UnsupportedFeature::ColorType,
-                detail: "only RGB and RGBA are supported",
+                detail: "only grayscale, grayscale-alpha, RGB, and RGBA are supported",
             });
         }
     };
@@ -490,6 +509,16 @@ fn normalize_row(source: &[u8], color: ColorType, destination: &mut [u8]) -> Res
     }
 
     match color {
+        ColorType::Grayscale => {
+            for (gray, rgba) in source.iter().zip(destination.chunks_exact_mut(4)) {
+                rgba.copy_from_slice(&[*gray, *gray, *gray, u8::MAX]);
+            }
+        }
+        ColorType::GrayscaleAlpha => {
+            for (gray_alpha, rgba) in source.chunks_exact(2).zip(destination.chunks_exact_mut(4)) {
+                rgba.copy_from_slice(&[gray_alpha[0], gray_alpha[0], gray_alpha[0], gray_alpha[1]]);
+            }
+        }
         ColorType::Rgb => {
             for (rgb, rgba) in source.chunks_exact(3).zip(destination.chunks_exact_mut(4)) {
                 rgba.copy_from_slice(&[rgb[0], rgb[1], rgb[2], u8::MAX]);
@@ -499,7 +528,7 @@ fn normalize_row(source: &[u8], color: ColorType, destination: &mut [u8]) -> Res
         _ => {
             return Err(Error::Unsupported {
                 feature: UnsupportedFeature::ColorType,
-                detail: "only RGB and RGBA are supported",
+                detail: "only grayscale, grayscale-alpha, RGB, and RGBA are supported",
             });
         }
     }
@@ -508,15 +537,18 @@ fn normalize_row(source: &[u8], color: ColorType, destination: &mut [u8]) -> Res
 
 fn normalize_pixel(source: &[u8], color: ColorType) -> Result<[u8; 4]> {
     match color {
+        ColorType::Grayscale if source.len() == 1 => Ok([source[0], source[0], source[0], u8::MAX]),
+        ColorType::GrayscaleAlpha if source.len() == 2 => {
+            Ok([source[0], source[0], source[0], source[1]])
+        }
         ColorType::Rgb if source.len() == 3 => Ok([source[0], source[1], source[2], 255]),
         ColorType::Rgba if source.len() == 4 => Ok([source[0], source[1], source[2], source[3]]),
-        ColorType::Rgb | ColorType::Rgba => Err(Error::DecodeFailure(format!(
-            "decoded Adam7 sample has {} bytes",
-            source.len()
-        ))),
+        ColorType::Grayscale | ColorType::GrayscaleAlpha | ColorType::Rgb | ColorType::Rgba => Err(
+            Error::DecodeFailure(format!("decoded Adam7 sample has {} bytes", source.len())),
+        ),
         _ => Err(Error::Unsupported {
             feature: UnsupportedFeature::ColorType,
-            detail: "only RGB and RGBA are supported",
+            detail: "only grayscale, grayscale-alpha, RGB, and RGBA are supported",
         }),
     }
 }
@@ -564,9 +596,11 @@ mod tests {
 
     fn encode_adam7_png(width: u32, height: u32, color: ColorType, pixels: &[u8]) -> Vec<u8> {
         let sample_bytes = match color {
+            ColorType::Grayscale => 1_usize,
+            ColorType::GrayscaleAlpha => 2_usize,
             ColorType::Rgb => 3_usize,
             ColorType::Rgba => 4_usize,
-            _ => panic!("test helper supports only RGB and RGBA"),
+            _ => panic!("test helper does not support this color type"),
         };
         let mut filtered = Vec::new();
         for pass in ADAM7_PASSES {
@@ -599,7 +633,9 @@ mod tests {
         ihdr.extend_from_slice(&height.to_be_bytes());
         ihdr.push(8);
         ihdr.push(match color {
+            ColorType::Grayscale => 0,
             ColorType::Rgb => 2,
+            ColorType::GrayscaleAlpha => 4,
             ColorType::Rgba => 6,
             _ => unreachable!(),
         });
@@ -653,6 +689,72 @@ mod tests {
     }
 
     #[test]
+    fn streams_grayscale_rows_and_preserves_grayscale_alpha() {
+        let grayscale = encode_png(
+            3,
+            1,
+            ColorType::Grayscale,
+            BitDepth::Eight,
+            Filter::Sub,
+            &[7, 80, 201],
+        );
+        let mut grayscale_rgba = Vec::new();
+        decode_png_rows(&grayscale, &default_options(), |row| {
+            grayscale_rgba.extend_from_slice(row.pixels);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            grayscale_rgba,
+            [7, 7, 7, 255, 80, 80, 80, 255, 201, 201, 201, 255]
+        );
+
+        let grayscale_alpha = encode_png(
+            2,
+            1,
+            ColorType::GrayscaleAlpha,
+            BitDepth::Eight,
+            Filter::Paeth,
+            &[31, 0, 190, 117],
+        );
+        let mut grayscale_alpha_rgba = Vec::new();
+        decode_png_rows(&grayscale_alpha, &default_options(), |row| {
+            grayscale_alpha_rgba.extend_from_slice(row.pixels);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(grayscale_alpha_rgba, [31, 31, 31, 0, 190, 190, 190, 117]);
+    }
+
+    #[test]
+    fn rejects_separate_grayscale_transparency_before_rows() {
+        let mut encoded = Vec::new();
+        let mut encoder = png::Encoder::new(&mut encoded, 1, 1);
+        encoder.set_color(ColorType::Grayscale);
+        encoder.set_depth(BitDepth::Eight);
+        encoder.set_trns(vec![0, 10]);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[10]).unwrap();
+        writer.finish().unwrap();
+        let mut callbacks = 0;
+
+        let error = decode_png_rows(&encoded, &default_options(), |_| {
+            callbacks += 1;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert_eq!(callbacks, 0);
+        assert!(matches!(
+            error,
+            Error::Unsupported {
+                feature: UnsupportedFeature::ColorType,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn adam7_rgb_and_rgba_match_non_interlaced_thumbnails() {
         for color in [ColorType::Rgb, ColorType::Rgba] {
             let sample_bytes = if color == ColorType::Rgb { 3 } else { 4 };
@@ -683,6 +785,41 @@ mod tests {
             let mut options = default_options();
             options.max_width = 5;
             options.max_height = 4;
+
+            assert_eq!(
+                thumbnail_png_rgba(&adam7, &options).unwrap(),
+                thumbnail_png_rgba(&sequential, &options).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn adam7_grayscale_formats_match_non_interlaced_thumbnails() {
+        for color in [ColorType::Grayscale, ColorType::GrayscaleAlpha] {
+            let sample_bytes = if color == ColorType::Grayscale { 1 } else { 2 };
+            let width = 13_u32;
+            let height = 10_u32;
+            let mut pixels = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    pixels.push(u8::try_from((x * 37 + y * 19) % 256).unwrap());
+                    if sample_bytes == 2 {
+                        pixels.push(u8::try_from((x * 13 + y * 41) % 256).unwrap());
+                    }
+                }
+            }
+            let adam7 = encode_adam7_png(width, height, color, &pixels);
+            let sequential = encode_png(
+                width,
+                height,
+                color,
+                BitDepth::Eight,
+                Filter::Paeth,
+                &pixels,
+            );
+            let mut options = default_options();
+            options.max_width = 6;
+            options.max_height = 5;
 
             assert_eq!(
                 thumbnail_png_rgba(&adam7, &options).unwrap(),
@@ -761,10 +898,15 @@ mod tests {
 
     #[test]
     fn adam7_truncation_fails_without_panicking() {
-        let pixels = vec![42; 17 * 13 * 4];
-        let mut encoded = encode_adam7_png(17, 13, ColorType::Rgba, &pixels);
-        encoded.truncate(encoded.len() - 20);
-        assert!(thumbnail_png_rgba(&encoded, &default_options()).is_err());
+        for (color, sample_bytes) in [
+            (ColorType::GrayscaleAlpha, 2_usize),
+            (ColorType::Rgba, 4_usize),
+        ] {
+            let pixels = vec![42; 17 * 13 * sample_bytes];
+            let mut encoded = encode_adam7_png(17, 13, color, &pixels);
+            encoded.truncate(encoded.len() - 20);
+            assert!(thumbnail_png_rgba(&encoded, &default_options()).is_err());
+        }
     }
 
     #[test]
@@ -1077,23 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_grayscale_and_sixteen_bit_pngs() {
-        let grayscale = encode_png(
-            1,
-            1,
-            ColorType::Grayscale,
-            BitDepth::Eight,
-            Filter::NoFilter,
-            &[10],
-        );
-        assert!(matches!(
-            decode_png_rows(&grayscale, &default_options(), |_| Ok(())).unwrap_err(),
-            Error::Unsupported {
-                feature: UnsupportedFeature::ColorType,
-                ..
-            }
-        ));
-
+    fn rejects_sixteen_bit_pngs() {
         let sixteen_bit = encode_png(
             1,
             1,
