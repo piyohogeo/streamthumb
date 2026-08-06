@@ -1126,3 +1126,13 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 5. The memory planner uses one source byte per grayscale pixel and two per grayscale-alpha pixel while retaining the same bounded RGBA normalization and output allowances.
 6. Separate `tRNS` transparency on grayscale or RGB input is rejected before rows are exposed because identity decoding does not expand it. Callers must use grayscale-alpha or RGBA until explicit `tRNS` support is implemented.
 7. Tests cover row normalization, grayscale-alpha transparency, Adam7 equivalence with non-interlaced input, truncated grayscale-alpha Adam7 data, and early `tRNS` rejection. Palette and 16-bit inputs remain deferred.
+
+### Phase 10 decisions
+
+1. Palette PNG support accepts 1-, 2-, 4-, and 8-bit indices for both non-interlaced and Adam7 input. `PLTE` colors and optional `tRNS` alpha values are normalized to straight-alpha RGBA8.
+2. Palette expansion is implemented inside streamthumb while the decoder remains in identity mode. This permits explicit validation instead of inheriting the codec's fallback for indices outside the declared palette.
+3. The lookup table contains at most 256 RGBA entries. Missing `PLTE`, invalid palette lengths, too many entries for the declared bit depth, excess `tRNS` entries, and out-of-range pixel indices fail deterministically.
+4. Packed indices are extracted most-significant-bit first within each byte. Row padding is discarded independently for every non-interlaced row and Adam7 pass row.
+5. Memory planning conservatively reserves one packed source byte per pixel, the existing normalized RGBA row, and decoder staging. The lookup table is bounded to 1 KiB and fits within the documented decoder staging allowance.
+6. Tests cover exact palette and alpha expansion, all four legal bit depths, non-interlaced versus Adam7 equivalence, omitted trailing `tRNS` alpha values, and malformed out-of-range indices in both decode orders.
+7. Palette support flows through the existing Rust thumbnail, row callback, CLI, and WASM APIs without format-specific public options. Sixteen-bit samples remain deferred.

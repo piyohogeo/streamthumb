@@ -18,7 +18,7 @@ cargo +nightly fuzz run area_downsampler
 
 The checked-in corpus contains minimal malformed seeds and a focused subset of Willem van Schaik's PNG Suite. The PNG Suite fixtures were copied from the Go project's `src/image/png/testdata/pngsuite` directory. Their permission notice is preserved in `corpus/PNG_SUITE_LICENSE.txt`.
 
-The selected PNG Suite files cover supported grayscale8, RGB8, and RGBA8 images plus rejected palette, RGB16, and RGBA16 inputs. Reduced crash samples should preserve their provenance alongside the file.
+The selected PNG Suite files cover supported grayscale8, palette8, RGB8, and RGBA8 images plus rejected RGB16 and RGBA16 inputs. Reduced crash samples should preserve their provenance alongside the file.
 
 The targets use deliberately small resource limits so decompression bombs and oversized headers are rejected early during continuous fuzzing. The fused thumbnail target exercises both non-interlaced and Adam7 paths when mutations produce valid supported headers and pass data.
 

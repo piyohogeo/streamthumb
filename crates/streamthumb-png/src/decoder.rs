@@ -64,9 +64,10 @@ where
         .read_header_info()
         .map_err(|error| map_decode_error(error, decoder_limit))?;
     let dimensions = Dimensions::new(header.width, header.height)?;
-    validate_color_depth(header.color_type, header.bit_depth)?;
+    let source_color = header.color_type;
+    validate_source_color_depth(source_color, header.bit_depth)?;
     reject_interlacing(header.interlaced)?;
-    let source_bytes_per_pixel = bytes_per_pixel(header.color_type)?;
+    let source_bytes_per_pixel = planning_bytes_per_pixel(source_color)?;
     let plan = plan_thumbnail(
         InputInfo {
             dimensions,
@@ -94,9 +95,10 @@ where
             detail: "APNG is not supported",
         });
     }
-    reject_separate_transparency(reader.info().trns.is_some())?;
+    reject_separate_transparency(source_color, reader.info().trns.is_some())?;
     let (output_color, output_depth) = reader.output_color_type();
-    validate_color_depth(output_color, output_depth)?;
+    validate_source_color_depth(output_color, output_depth)?;
+    let source_format = SourceFormat::from_info(reader.info())?;
     reject_interlacing(reader.info().interlaced)?;
 
     let rgba_row_bytes = usize::try_from(dimensions.width)
@@ -118,7 +120,7 @@ where
         .next_row()
         .map_err(|error| map_decode_error(error, decoder_limit))?
     {
-        normalize_row(row.data(), output_color, &mut normalized_row)?;
+        normalize_row(row.data(), &source_format, &mut normalized_row)?;
         consume_row(RgbaRow {
             y: rows_decoded,
             pixels: &normalized_row,
@@ -213,7 +215,7 @@ fn png_is_interlaced(input: &[u8], options: &ThumbnailOptions) -> Result<bool> {
     let header = decoder
         .read_header_info()
         .map_err(|error| map_decode_error(error, decoder_limit))?;
-    validate_color_depth(header.color_type, header.bit_depth)?;
+    validate_source_color_depth(header.color_type, header.bit_depth)?;
     Ok(header.interlaced)
 }
 
@@ -237,13 +239,14 @@ fn thumbnail_png_adam7_rgba_planned(
         .read_header_info()
         .map_err(|error| map_decode_error(error, decoder_limit))?;
     let dimensions = Dimensions::new(header.width, header.height)?;
-    validate_color_depth(header.color_type, header.bit_depth)?;
+    let source_color = header.color_type;
+    validate_source_color_depth(source_color, header.bit_depth)?;
     if !header.interlaced {
         return Err(Error::DecodeFailure(
             "Adam7 path received a non-interlaced PNG".to_owned(),
         ));
     }
-    let source_bytes_per_pixel = bytes_per_pixel(header.color_type)?;
+    let source_bytes_per_pixel = planning_bytes_per_pixel(source_color)?;
     let plan = plan_thumbnail_sparse(
         InputInfo {
             dimensions,
@@ -271,9 +274,10 @@ fn thumbnail_png_adam7_rgba_planned(
             detail: "APNG is not supported",
         });
     }
-    reject_separate_transparency(reader.info().trns.is_some())?;
+    reject_separate_transparency(source_color, reader.info().trns.is_some())?;
     let (output_color, output_depth) = reader.output_color_type();
-    validate_color_depth(output_color, output_depth)?;
+    validate_source_color_depth(output_color, output_depth)?;
+    let source_format = SourceFormat::from_info(reader.info())?;
     if !reader.info().interlaced {
         return Err(Error::DecodeFailure(
             "PNG interlace mode changed after header validation".to_owned(),
@@ -281,7 +285,6 @@ fn thumbnail_png_adam7_rgba_planned(
     }
 
     let mut downsampler = SparseAreaDownsampler::new(plan.source, plan.output)?;
-    let sample_bytes = usize::from(source_bytes_per_pixel);
     for pass in ADAM7_PASSES {
         let samples = pass_sample_count(dimensions.width, pass.x_offset, pass.x_stride);
         let lines = pass_sample_count(dimensions.height, pass.y_offset, pass.y_stride);
@@ -298,12 +301,11 @@ fn thumbnail_png_adam7_rgba_planned(
                     "PNG decoder returned a non-Adam7 row for interlaced input".to_owned(),
                 ));
             }
-            let expected_bytes = usize::try_from(samples)
-                .ok()
-                .and_then(|count| count.checked_mul(sample_bytes))
-                .ok_or(streamthumb_core::Error::IntegerOverflow {
-                    operation: "Adam7 pass row byte count",
+            let sample_count =
+                usize::try_from(samples).map_err(|_| streamthumb_core::Error::IntegerOverflow {
+                    operation: "Adam7 pass sample count conversion",
                 })?;
+            let expected_bytes = source_format.row_bytes(sample_count)?;
             if row.data().len() != expected_bytes {
                 return Err(Error::DecodeFailure(format!(
                     "Adam7 pass row has {} bytes; expected {expected_bytes}",
@@ -320,12 +322,7 @@ fn thumbnail_png_adam7_rgba_planned(
                 .ok_or(streamthumb_core::Error::IntegerOverflow {
                     operation: "Adam7 source y coordinate",
                 })?;
-            for (sample, source) in row.data().chunks_exact(sample_bytes).enumerate() {
-                let sample = u32::try_from(sample).map_err(|_| {
-                    streamthumb_core::Error::IntegerOverflow {
-                        operation: "Adam7 sample index conversion",
-                    }
-                })?;
+            for sample in 0..samples {
                 let x = pass
                     .x_offset
                     .checked_add(sample.checked_mul(pass.x_stride).ok_or(
@@ -336,7 +333,18 @@ fn thumbnail_png_adam7_rgba_planned(
                     .ok_or(streamthumb_core::Error::IntegerOverflow {
                         operation: "Adam7 source x coordinate",
                     })?;
-                downsampler.push_pixel(x, y, normalize_pixel(source, output_color)?)?;
+                downsampler.push_pixel(
+                    x,
+                    y,
+                    source_format.pixel(
+                        row.data(),
+                        usize::try_from(sample).map_err(|_| {
+                            streamthumb_core::Error::IntegerOverflow {
+                                operation: "Adam7 sample index conversion",
+                            }
+                        })?,
+                    )?,
+                )?;
             }
         }
     }
@@ -429,20 +437,20 @@ fn checked_encoded_length(input: &[u8], options: &ThumbnailOptions) -> Result<u6
     Ok(encoded_bytes)
 }
 
-fn validate_color_depth(color: ColorType, depth: BitDepth) -> Result<()> {
-    if depth != BitDepth::Eight {
+fn validate_source_color_depth(color: ColorType, depth: BitDepth) -> Result<()> {
+    let valid_depth = match color {
+        ColorType::Indexed => matches!(
+            depth,
+            BitDepth::One | BitDepth::Two | BitDepth::Four | BitDepth::Eight
+        ),
+        ColorType::Grayscale | ColorType::GrayscaleAlpha | ColorType::Rgb | ColorType::Rgba => {
+            depth == BitDepth::Eight
+        }
+    };
+    if !valid_depth {
         return Err(Error::Unsupported {
             feature: UnsupportedFeature::BitDepth,
-            detail: "only 8-bit samples are supported",
-        });
-    }
-    if !matches!(
-        color,
-        ColorType::Grayscale | ColorType::GrayscaleAlpha | ColorType::Rgb | ColorType::Rgba
-    ) {
-        return Err(Error::Unsupported {
-            feature: UnsupportedFeature::ColorType,
-            detail: "only grayscale, grayscale-alpha, RGB, and RGBA are supported",
+            detail: "only 8-bit direct samples and 1-, 2-, 4-, or 8-bit palette indices are supported",
         });
     }
     Ok(())
@@ -458,14 +466,22 @@ fn reject_interlacing(interlaced: bool) -> Result<()> {
     Ok(())
 }
 
-fn reject_separate_transparency(has_transparency: bool) -> Result<()> {
-    if has_transparency {
+fn reject_separate_transparency(color: ColorType, has_transparency: bool) -> Result<()> {
+    if has_transparency && matches!(color, ColorType::Grayscale | ColorType::Rgb) {
         return Err(Error::Unsupported {
             feature: UnsupportedFeature::ColorType,
             detail: "tRNS transparency is not supported; use an alpha color type",
         });
     }
     Ok(())
+}
+
+fn planning_bytes_per_pixel(color: ColorType) -> Result<u8> {
+    if color == ColorType::Indexed {
+        Ok(1)
+    } else {
+        bytes_per_pixel(color)
+    }
 }
 
 fn bytes_per_pixel(color: ColorType) -> Result<u8> {
@@ -481,75 +497,189 @@ fn bytes_per_pixel(color: ColorType) -> Result<u8> {
     }
 }
 
-fn normalize_row(source: &[u8], color: ColorType, destination: &mut [u8]) -> Result<()> {
-    let samples = match color {
-        ColorType::Grayscale => 1,
-        ColorType::GrayscaleAlpha => 2,
-        ColorType::Rgb => 3,
-        ColorType::Rgba => 4,
-        _ => {
-            return Err(Error::Unsupported {
-                feature: UnsupportedFeature::ColorType,
-                detail: "only grayscale, grayscale-alpha, RGB, and RGBA are supported",
+enum SourceFormat {
+    Direct { color: ColorType, bytes: usize },
+    Indexed { colors: Vec<[u8; 4]>, bits: usize },
+}
+
+impl SourceFormat {
+    fn from_info(info: &png::Info<'_>) -> Result<Self> {
+        if info.color_type != ColorType::Indexed {
+            return Ok(Self::Direct {
+                color: info.color_type,
+                bytes: usize::from(bytes_per_pixel(info.color_type)?),
             });
         }
-    };
-    let expected_source_len = destination
-        .len()
-        .checked_div(4)
-        .and_then(|width| width.checked_mul(samples))
-        .ok_or(streamthumb_core::Error::IntegerOverflow {
-            operation: "decoded PNG row length",
+
+        let palette = info.palette.as_deref().ok_or_else(|| {
+            Error::DecodeFailure("indexed PNG is missing its PLTE chunk".to_owned())
         })?;
+        if palette.is_empty() || palette.len() % 3 != 0 {
+            return Err(Error::DecodeFailure(
+                "indexed PNG has an invalid PLTE length".to_owned(),
+            ));
+        }
+        let entries = palette.len() / 3;
+        let bits = bit_depth_bits(info.bit_depth)?;
+        let capacity = 1_usize
+            .checked_shl(u32::try_from(bits).map_err(|_| {
+                streamthumb_core::Error::IntegerOverflow {
+                    operation: "palette bit depth conversion",
+                }
+            })?)
+            .ok_or(streamthumb_core::Error::IntegerOverflow {
+                operation: "palette capacity",
+            })?;
+        if entries > capacity {
+            return Err(Error::DecodeFailure(format!(
+                "indexed PNG has {entries} palette entries but its bit depth permits {capacity}"
+            )));
+        }
+        let transparency = match info.trns.as_deref() {
+            Some(transparency) => transparency,
+            None => &[],
+        };
+        if transparency.len() > entries {
+            return Err(Error::DecodeFailure(format!(
+                "indexed PNG has {} transparency entries for {entries} palette entries",
+                transparency.len()
+            )));
+        }
+        let allocation_bytes =
+            entries
+                .checked_mul(4)
+                .ok_or(streamthumb_core::Error::IntegerOverflow {
+                    operation: "palette lookup allocation",
+                })?;
+        let mut colors = Vec::new();
+        colors
+            .try_reserve_exact(entries)
+            .map_err(|_| Error::AllocationFailed {
+                bytes: allocation_bytes,
+            })?;
+        for (index, rgb) in palette.chunks_exact(3).enumerate() {
+            let alpha = match transparency.get(index) {
+                Some(alpha) => *alpha,
+                None => u8::MAX,
+            };
+            colors.push([rgb[0], rgb[1], rgb[2], alpha]);
+        }
+        Ok(Self::Indexed { colors, bits })
+    }
+
+    fn row_bytes(&self, samples: usize) -> Result<usize> {
+        match self {
+            Self::Direct { bytes, .. } => samples.checked_mul(*bytes).ok_or_else(|| {
+                streamthumb_core::Error::IntegerOverflow {
+                    operation: "decoded PNG row length",
+                }
+                .into()
+            }),
+            Self::Indexed { bits, .. } => samples
+                .checked_mul(*bits)
+                .and_then(|value| value.checked_add(7))
+                .map(|value| value / 8)
+                .ok_or_else(|| {
+                    streamthumb_core::Error::IntegerOverflow {
+                        operation: "packed palette row length",
+                    }
+                    .into()
+                }),
+        }
+    }
+
+    fn pixel(&self, source: &[u8], index: usize) -> Result<[u8; 4]> {
+        match self {
+            Self::Direct { color, bytes } => {
+                let start =
+                    index
+                        .checked_mul(*bytes)
+                        .ok_or(streamthumb_core::Error::IntegerOverflow {
+                            operation: "direct sample offset",
+                        })?;
+                let end =
+                    start
+                        .checked_add(*bytes)
+                        .ok_or(streamthumb_core::Error::IntegerOverflow {
+                            operation: "direct sample end",
+                        })?;
+                let sample = source.get(start..end).ok_or_else(|| {
+                    Error::DecodeFailure("decoded PNG row ended within a sample".to_owned())
+                })?;
+                normalize_direct_pixel(sample, *color)
+            }
+            Self::Indexed { colors, bits } => {
+                let bit_offset =
+                    index
+                        .checked_mul(*bits)
+                        .ok_or(streamthumb_core::Error::IntegerOverflow {
+                            operation: "palette sample bit offset",
+                        })?;
+                let byte = *source.get(bit_offset / 8).ok_or_else(|| {
+                    Error::DecodeFailure("packed palette row ended within an index".to_owned())
+                })?;
+                let shift = 8 - *bits - bit_offset % 8;
+                let mask = (1_u16 << *bits) - 1;
+                let palette_index = usize::from((u16::from(byte >> shift)) & mask);
+                colors.get(palette_index).copied().ok_or_else(|| {
+                    Error::DecodeFailure(format!(
+                        "palette index {palette_index} exceeds {} entries",
+                        colors.len()
+                    ))
+                })
+            }
+        }
+    }
+}
+
+fn bit_depth_bits(depth: BitDepth) -> Result<usize> {
+    match depth {
+        BitDepth::One => Ok(1),
+        BitDepth::Two => Ok(2),
+        BitDepth::Four => Ok(4),
+        BitDepth::Eight => Ok(8),
+        BitDepth::Sixteen => Err(Error::Unsupported {
+            feature: UnsupportedFeature::BitDepth,
+            detail: "16-bit palette indices are not supported",
+        }),
+    }
+}
+
+fn normalize_row(source: &[u8], format: &SourceFormat, destination: &mut [u8]) -> Result<()> {
+    let width =
+        destination
+            .len()
+            .checked_div(4)
+            .ok_or(streamthumb_core::Error::IntegerOverflow {
+                operation: "normalized PNG row width",
+            })?;
+    let expected_source_len = format.row_bytes(width)?;
     if source.len() != expected_source_len {
         return Err(Error::DecodeFailure(format!(
             "decoded row has {} bytes; expected {expected_source_len}",
             source.len()
         )));
     }
-
-    match color {
-        ColorType::Grayscale => {
-            for (gray, rgba) in source.iter().zip(destination.chunks_exact_mut(4)) {
-                rgba.copy_from_slice(&[*gray, *gray, *gray, u8::MAX]);
-            }
-        }
-        ColorType::GrayscaleAlpha => {
-            for (gray_alpha, rgba) in source.chunks_exact(2).zip(destination.chunks_exact_mut(4)) {
-                rgba.copy_from_slice(&[gray_alpha[0], gray_alpha[0], gray_alpha[0], gray_alpha[1]]);
-            }
-        }
-        ColorType::Rgb => {
-            for (rgb, rgba) in source.chunks_exact(3).zip(destination.chunks_exact_mut(4)) {
-                rgba.copy_from_slice(&[rgb[0], rgb[1], rgb[2], u8::MAX]);
-            }
-        }
-        ColorType::Rgba => destination.copy_from_slice(source),
-        _ => {
-            return Err(Error::Unsupported {
-                feature: UnsupportedFeature::ColorType,
-                detail: "only grayscale, grayscale-alpha, RGB, and RGBA are supported",
-            });
-        }
+    for (index, rgba) in destination.chunks_exact_mut(4).enumerate() {
+        rgba.copy_from_slice(&format.pixel(source, index)?);
     }
     Ok(())
 }
 
-fn normalize_pixel(source: &[u8], color: ColorType) -> Result<[u8; 4]> {
+fn normalize_direct_pixel(source: &[u8], color: ColorType) -> Result<[u8; 4]> {
     match color {
         ColorType::Grayscale if source.len() == 1 => Ok([source[0], source[0], source[0], u8::MAX]),
         ColorType::GrayscaleAlpha if source.len() == 2 => {
             Ok([source[0], source[0], source[0], source[1]])
         }
-        ColorType::Rgb if source.len() == 3 => Ok([source[0], source[1], source[2], 255]),
+        ColorType::Rgb if source.len() == 3 => Ok([source[0], source[1], source[2], u8::MAX]),
         ColorType::Rgba if source.len() == 4 => Ok([source[0], source[1], source[2], source[3]]),
         ColorType::Grayscale | ColorType::GrayscaleAlpha | ColorType::Rgb | ColorType::Rgba => Err(
-            Error::DecodeFailure(format!("decoded Adam7 sample has {} bytes", source.len())),
+            Error::DecodeFailure(format!("decoded PNG sample has {} bytes", source.len())),
         ),
-        _ => Err(Error::Unsupported {
-            feature: UnsupportedFeature::ColorType,
-            detail: "only grayscale, grayscale-alpha, RGB, and RGBA are supported",
-        }),
+        ColorType::Indexed => Err(Error::DecodeFailure(
+            "palette sample reached the direct normalizer".to_owned(),
+        )),
     }
 }
 
@@ -590,6 +720,60 @@ mod tests {
         encoder.set_filter(filter);
         let mut writer = encoder.write_header().unwrap();
         writer.write_image_data(pixels).unwrap();
+        writer.finish().unwrap();
+        encoded
+    }
+
+    fn test_depth_bits(depth: BitDepth) -> usize {
+        match depth {
+            BitDepth::One => 1,
+            BitDepth::Two => 2,
+            BitDepth::Four => 4,
+            BitDepth::Eight => 8,
+            BitDepth::Sixteen => panic!("test palette helper does not support 16-bit indices"),
+        }
+    }
+
+    fn pack_palette_row(indices: &[u8], depth: BitDepth) -> Vec<u8> {
+        let bits = test_depth_bits(depth);
+        let mut packed = vec![0; (indices.len() * bits).div_ceil(8)];
+        let mask = u8::try_from((1_u16 << bits) - 1).unwrap();
+        for (index, value) in indices.iter().copied().enumerate() {
+            let bit_offset = index * bits;
+            let shift = 8 - bits - bit_offset % 8;
+            packed[bit_offset / 8] |= (value & mask) << shift;
+        }
+        packed
+    }
+
+    fn encode_palette_png(
+        width: u32,
+        height: u32,
+        depth: BitDepth,
+        indices: &[u8],
+        palette: &[u8],
+        transparency: &[u8],
+    ) -> Vec<u8> {
+        let width_usize = usize::try_from(width).unwrap();
+        let mut packed = Vec::new();
+        for row in indices.chunks_exact(width_usize) {
+            packed.extend_from_slice(&pack_palette_row(row, depth));
+        }
+        assert_eq!(
+            indices.len(),
+            width_usize * usize::try_from(height).unwrap()
+        );
+
+        let mut encoded = Vec::new();
+        let mut encoder = png::Encoder::new(&mut encoded, width, height);
+        encoder.set_color(ColorType::Indexed);
+        encoder.set_depth(depth);
+        encoder.set_palette(palette.to_vec());
+        if !transparency.is_empty() {
+            encoder.set_trns(transparency.to_vec());
+        }
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&packed).unwrap();
         writer.finish().unwrap();
         encoded
     }
@@ -641,6 +825,55 @@ mod tests {
         });
         ihdr.extend_from_slice(&[0, 0, 1]);
         append_chunk(&mut encoded, *b"IHDR", &ihdr);
+        append_chunk(&mut encoded, *b"IDAT", &compressed);
+        append_chunk(&mut encoded, *b"IEND", &[]);
+        encoded
+    }
+
+    fn encode_adam7_palette_png(
+        width: u32,
+        height: u32,
+        depth: BitDepth,
+        indices: &[u8],
+        palette: &[u8],
+        transparency: &[u8],
+    ) -> Vec<u8> {
+        let mut filtered = Vec::new();
+        for pass in ADAM7_PASSES {
+            let samples = pass_sample_count(width, pass.x_offset, pass.x_stride);
+            let lines = pass_sample_count(height, pass.y_offset, pass.y_stride);
+            if samples == 0 || lines == 0 {
+                continue;
+            }
+            for line in 0..lines {
+                filtered.push(0);
+                let y = pass.y_offset + line * pass.y_stride;
+                let mut pass_indices = Vec::new();
+                for sample in 0..samples {
+                    let x = pass.x_offset + sample * pass.x_stride;
+                    let offset =
+                        usize::try_from(u64::from(y) * u64::from(width) + u64::from(x)).unwrap();
+                    pass_indices.push(indices[offset]);
+                }
+                filtered.extend_from_slice(&pack_palette_row(&pass_indices, depth));
+            }
+        }
+
+        let mut compressor = ZlibEncoder::new(Vec::new(), Compression::default());
+        compressor.write_all(&filtered).unwrap();
+        let compressed = compressor.finish().unwrap();
+        let mut encoded = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.push(u8::try_from(test_depth_bits(depth)).unwrap());
+        ihdr.push(3);
+        ihdr.extend_from_slice(&[0, 0, 1]);
+        append_chunk(&mut encoded, *b"IHDR", &ihdr);
+        append_chunk(&mut encoded, *b"PLTE", palette);
+        if !transparency.is_empty() {
+            append_chunk(&mut encoded, *b"tRNS", transparency);
+        }
         append_chunk(&mut encoded, *b"IDAT", &compressed);
         append_chunk(&mut encoded, *b"IEND", &[]);
         encoded
@@ -755,6 +988,70 @@ mod tests {
     }
 
     #[test]
+    fn expands_palette_rows_with_transparency() {
+        let palette = [
+            255, 0, 0, // red
+            0, 255, 0, // green
+            0, 0, 255, // blue
+            240, 240, 240, // light gray
+        ];
+        let encoded =
+            encode_palette_png(4, 1, BitDepth::Two, &[0, 1, 2, 3], &palette, &[0, 64, 128]);
+        let mut rgba = Vec::new();
+
+        decode_png_rows(&encoded, &default_options(), |row| {
+            rgba.extend_from_slice(row.pixels);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            rgba,
+            [
+                255, 0, 0, 0, 0, 255, 0, 64, 0, 0, 255, 128, 240, 240, 240, 255,
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_palette_indices_outside_plte_for_sequential_and_adam7() {
+        let palette = [12, 34, 56];
+        let sequential = encode_palette_png(1, 1, BitDepth::Two, &[3], &palette, &[]);
+        let adam7 = encode_adam7_palette_png(1, 1, BitDepth::Two, &[3], &palette, &[]);
+        let mut callbacks = 0;
+
+        assert!(
+            decode_png_rows(&sequential, &default_options(), |_| {
+                callbacks += 1;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(callbacks, 0);
+        assert!(thumbnail_png_rgba(&adam7, &default_options()).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_palette_and_transparency_lengths_before_rows() {
+        let too_many_colors =
+            encode_palette_png(1, 1, BitDepth::One, &[0], &[1, 2, 3, 4, 5, 6, 7, 8, 9], &[]);
+        let too_much_transparency =
+            encode_palette_png(1, 1, BitDepth::One, &[0], &[1, 2, 3], &[0, 128]);
+
+        for encoded in [too_many_colors, too_much_transparency] {
+            let mut callbacks = 0;
+            assert!(
+                decode_png_rows(&encoded, &default_options(), |_| {
+                    callbacks += 1;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert_eq!(callbacks, 0);
+        }
+    }
+
+    #[test]
     fn adam7_rgb_and_rgba_match_non_interlaced_thumbnails() {
         for color in [ColorType::Rgb, ColorType::Rgba] {
             let sample_bytes = if color == ColorType::Rgb { 3 } else { 4 };
@@ -824,6 +1121,50 @@ mod tests {
             assert_eq!(
                 thumbnail_png_rgba(&adam7, &options).unwrap(),
                 thumbnail_png_rgba(&sequential, &options).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn adam7_palette_depths_match_non_interlaced_thumbnails() {
+        for depth in [
+            BitDepth::One,
+            BitDepth::Two,
+            BitDepth::Four,
+            BitDepth::Eight,
+        ] {
+            let capacity = 1_usize << test_depth_bits(depth);
+            let entries = capacity.min(17);
+            let mut palette = Vec::new();
+            let mut transparency = Vec::new();
+            for index in 0..entries {
+                let value = u8::try_from(index).unwrap();
+                palette.extend_from_slice(&[
+                    value.wrapping_mul(31),
+                    value.wrapping_mul(67),
+                    value.wrapping_mul(113),
+                ]);
+                if index + 1 < entries {
+                    transparency.push(value.wrapping_mul(47));
+                }
+            }
+            let width = 13_u32;
+            let height = 10_u32;
+            let indices = (0..width * height)
+                .map(|index| u8::try_from(index as usize % entries).unwrap())
+                .collect::<Vec<_>>();
+            let sequential =
+                encode_palette_png(width, height, depth, &indices, &palette, &transparency);
+            let adam7 =
+                encode_adam7_palette_png(width, height, depth, &indices, &palette, &transparency);
+            let mut options = default_options();
+            options.max_width = 6;
+            options.max_height = 5;
+
+            assert_eq!(
+                thumbnail_png_rgba(&adam7, &options).unwrap(),
+                thumbnail_png_rgba(&sequential, &options).unwrap(),
+                "palette mismatch at {depth:?}"
             );
         }
     }

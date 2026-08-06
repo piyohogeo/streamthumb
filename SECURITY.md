@@ -17,7 +17,7 @@ The current API does not impose a wall-clock deadline. Dimension and pixel limit
 
 ## Supported input contract
 
-The thumbnail APIs accept static 8-bit grayscale, grayscale-alpha, RGB, and RGBA PNG files with either no interlacing or Adam7 interlacing. Grayscale or RGB files that use a separate `tRNS` transparency chunk are rejected; callers should use an alpha color type. The lower-level row callback API accepts only non-interlaced input because its contract requires complete rows in ascending order. APNG, palette, and 16-bit inputs are rejected deterministically rather than silently converted.
+The thumbnail APIs accept static 8-bit grayscale, grayscale-alpha, RGB, and RGBA PNG files plus 1-, 2-, 4-, and 8-bit palette PNG files, with either no interlacing or Adam7 interlacing. Palette `tRNS` transparency is supported. Grayscale or RGB files that use a separate `tRNS` transparency chunk are rejected; callers should use an alpha color type. The lower-level row callback API accepts only non-interlaced input because its contract requires complete rows in ascending order. APNG and 16-bit inputs are rejected deterministically rather than silently converted.
 
 ## Fuzzing
 
