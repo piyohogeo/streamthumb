@@ -66,6 +66,7 @@ where
     let dimensions = Dimensions::new(header.width, header.height)?;
     let source_color = header.color_type;
     validate_source_color_depth(source_color, header.bit_depth)?;
+    validate_direct_trns_chunk_length(input, source_color)?;
     reject_interlacing(header.interlaced)?;
     let source_bytes_per_pixel = planning_bytes_per_pixel(source_color, header.bit_depth)?;
     let plan = plan_thumbnail(
@@ -216,6 +217,7 @@ fn png_is_interlaced(input: &[u8], options: &ThumbnailOptions) -> Result<bool> {
         .read_header_info()
         .map_err(|error| map_decode_error(error, decoder_limit))?;
     validate_source_color_depth(header.color_type, header.bit_depth)?;
+    validate_direct_trns_chunk_length(input, header.color_type)?;
     Ok(header.interlaced)
 }
 
@@ -241,6 +243,7 @@ fn thumbnail_png_adam7_rgba_planned(
     let dimensions = Dimensions::new(header.width, header.height)?;
     let source_color = header.color_type;
     validate_source_color_depth(source_color, header.bit_depth)?;
+    validate_direct_trns_chunk_length(input, source_color)?;
     if !header.interlaced {
         return Err(Error::DecodeFailure(
             "Adam7 path received a non-interlaced PNG".to_owned(),
@@ -437,20 +440,79 @@ fn checked_encoded_length(input: &[u8], options: &ThumbnailOptions) -> Result<u6
     Ok(encoded_bytes)
 }
 
+fn validate_direct_trns_chunk_length(input: &[u8], color: ColorType) -> Result<()> {
+    let expected = match color {
+        ColorType::Grayscale => 2_usize,
+        ColorType::Rgb => 6_usize,
+        ColorType::GrayscaleAlpha | ColorType::Rgba | ColorType::Indexed => return Ok(()),
+    };
+    let mut offset = 8_usize;
+    while offset
+        .checked_add(12)
+        .is_some_and(|minimum| minimum <= input.len())
+    {
+        let length = usize::try_from(u32::from_be_bytes([
+            input[offset],
+            input[offset + 1],
+            input[offset + 2],
+            input[offset + 3],
+        ]))
+        .map_err(|_| streamthumb_core::Error::IntegerOverflow {
+            operation: "PNG chunk length conversion",
+        })?;
+        let chunk_type_start =
+            offset
+                .checked_add(4)
+                .ok_or(streamthumb_core::Error::IntegerOverflow {
+                    operation: "PNG chunk type offset",
+                })?;
+        let data_start =
+            chunk_type_start
+                .checked_add(4)
+                .ok_or(streamthumb_core::Error::IntegerOverflow {
+                    operation: "PNG chunk data offset",
+                })?;
+        let Some(data_end) = data_start.checked_add(length) else {
+            return Ok(());
+        };
+        let Some(chunk_end) = data_end.checked_add(4) else {
+            return Ok(());
+        };
+        if chunk_end > input.len() {
+            return Ok(());
+        }
+        let chunk_type = &input[chunk_type_start..data_start];
+        if chunk_type == b"tRNS" && length != expected {
+            return Err(Error::DecodeFailure(format!(
+                "direct-color tRNS has {length} bytes; expected {expected}"
+            )));
+        }
+        if chunk_type == b"IDAT" {
+            return Ok(());
+        }
+        offset = chunk_end;
+    }
+    Ok(())
+}
+
 fn validate_source_color_depth(color: ColorType, depth: BitDepth) -> Result<()> {
     let valid_depth = match color {
+        ColorType::Grayscale => matches!(
+            depth,
+            BitDepth::One | BitDepth::Two | BitDepth::Four | BitDepth::Eight | BitDepth::Sixteen
+        ),
         ColorType::Indexed => matches!(
             depth,
             BitDepth::One | BitDepth::Two | BitDepth::Four | BitDepth::Eight
         ),
-        ColorType::Grayscale | ColorType::GrayscaleAlpha | ColorType::Rgb | ColorType::Rgba => {
+        ColorType::GrayscaleAlpha | ColorType::Rgb | ColorType::Rgba => {
             matches!(depth, BitDepth::Eight | BitDepth::Sixteen)
         }
     };
     if !valid_depth {
         return Err(Error::Unsupported {
             feature: UnsupportedFeature::BitDepth,
-            detail: "only 8- or 16-bit direct samples and 1-, 2-, 4-, or 8-bit palette indices are supported",
+            detail: "grayscale supports 1, 2, 4, 8, or 16 bits; alpha and truecolor formats support 8 or 16 bits; palette indices support 1, 2, 4, or 8 bits",
         });
     }
     Ok(())
@@ -467,17 +529,20 @@ fn reject_interlacing(interlaced: bool) -> Result<()> {
 }
 
 fn reject_separate_transparency(color: ColorType, has_transparency: bool) -> Result<()> {
-    if has_transparency && matches!(color, ColorType::Grayscale | ColorType::Rgb) {
+    if has_transparency && color == ColorType::Rgb {
         return Err(Error::Unsupported {
             feature: UnsupportedFeature::ColorType,
-            detail: "tRNS transparency is not supported; use an alpha color type",
+            detail: "RGB tRNS transparency is not supported; use RGBA",
         });
     }
     Ok(())
 }
 
 fn planning_bytes_per_pixel(color: ColorType, depth: BitDepth) -> Result<u8> {
-    if color == ColorType::Indexed {
+    if color == ColorType::Indexed
+        || (color == ColorType::Grayscale
+            && matches!(depth, BitDepth::One | BitDepth::Two | BitDepth::Four))
+    {
         Ok(1)
     } else {
         direct_bytes_per_pixel(color, depth)
@@ -519,6 +584,10 @@ fn direct_bytes_per_pixel(color: ColorType, depth: BitDepth) -> Result<u8> {
 }
 
 enum SourceFormat {
+    Grayscale {
+        bits: usize,
+        transparent: Option<u16>,
+    },
     Direct {
         color: ColorType,
         depth: BitDepth,
@@ -532,6 +601,33 @@ enum SourceFormat {
 
 impl SourceFormat {
     fn from_info(info: &png::Info<'_>) -> Result<Self> {
+        if info.color_type == ColorType::Grayscale {
+            let bits = grayscale_depth_bits(info.bit_depth);
+            let transparent = match info.trns.as_deref() {
+                None => None,
+                Some(bytes) if bits < 16 && bytes.len() == 1 => {
+                    let value = u16::from(bytes[0]);
+                    let maximum = grayscale_sample_maximum(bits)?;
+                    if u32::from(value) > maximum {
+                        return Err(Error::DecodeFailure(format!(
+                            "grayscale tRNS sample {value} exceeds the {bits}-bit range"
+                        )));
+                    }
+                    Some(value)
+                }
+                Some(bytes) if bits == 16 && bytes.len() == 2 => {
+                    Some(u16::from_be_bytes([bytes[0], bytes[1]]))
+                }
+                Some(bytes) => {
+                    return Err(Error::DecodeFailure(format!(
+                        "normalized grayscale tRNS has {} bytes; expected {}",
+                        bytes.len(),
+                        if bits == 16 { 2 } else { 1 }
+                    )));
+                }
+            };
+            return Ok(Self::Grayscale { bits, transparent });
+        }
         if info.color_type != ColorType::Indexed {
             return Ok(Self::Direct {
                 color: info.color_type,
@@ -598,6 +694,7 @@ impl SourceFormat {
 
     fn row_bytes(&self, samples: usize) -> Result<usize> {
         match self {
+            Self::Grayscale { bits, .. } => grayscale_row_bytes(samples, *bits),
             Self::Direct { bytes, .. } => samples.checked_mul(*bytes).ok_or_else(|| {
                 streamthumb_core::Error::IntegerOverflow {
                     operation: "decoded PNG row length",
@@ -619,6 +716,9 @@ impl SourceFormat {
 
     fn pixel(&self, source: &[u8], index: usize) -> Result<[u8; 4]> {
         match self {
+            Self::Grayscale { bits, transparent } => {
+                normalize_grayscale_pixel(source, index, *bits, *transparent)
+            }
             Self::Direct {
                 color,
                 depth,
@@ -663,6 +763,101 @@ impl SourceFormat {
             }
         }
     }
+}
+
+fn grayscale_depth_bits(depth: BitDepth) -> usize {
+    match depth {
+        BitDepth::One => 1,
+        BitDepth::Two => 2,
+        BitDepth::Four => 4,
+        BitDepth::Eight => 8,
+        BitDepth::Sixteen => 16,
+    }
+}
+
+fn grayscale_sample_maximum(bits: usize) -> Result<u32> {
+    1_u32
+        .checked_shl(
+            u32::try_from(bits).map_err(|_| streamthumb_core::Error::IntegerOverflow {
+                operation: "grayscale bit depth conversion",
+            })?,
+        )
+        .and_then(|value| value.checked_sub(1))
+        .ok_or_else(|| {
+            streamthumb_core::Error::IntegerOverflow {
+                operation: "grayscale sample maximum",
+            }
+            .into()
+        })
+}
+
+fn grayscale_row_bytes(samples: usize, bits: usize) -> Result<usize> {
+    samples
+        .checked_mul(bits)
+        .and_then(|value| value.checked_add(7))
+        .map(|value| value / 8)
+        .ok_or_else(|| {
+            streamthumb_core::Error::IntegerOverflow {
+                operation: "packed grayscale row length",
+            }
+            .into()
+        })
+}
+
+fn normalize_grayscale_pixel(
+    source: &[u8],
+    index: usize,
+    bits: usize,
+    transparent: Option<u16>,
+) -> Result<[u8; 4]> {
+    let raw = match bits {
+        1 | 2 | 4 => {
+            let bit_offset =
+                index
+                    .checked_mul(bits)
+                    .ok_or(streamthumb_core::Error::IntegerOverflow {
+                        operation: "grayscale sample bit offset",
+                    })?;
+            let byte = *source.get(bit_offset / 8).ok_or_else(|| {
+                Error::DecodeFailure("packed grayscale row ended within a sample".to_owned())
+            })?;
+            let shift = 8 - bits - bit_offset % 8;
+            let mask = (1_u16 << bits) - 1;
+            u16::from(byte >> shift) & mask
+        }
+        8 => u16::from(*source.get(index).ok_or_else(|| {
+            Error::DecodeFailure("grayscale row ended within a sample".to_owned())
+        })?),
+        16 => {
+            let start = index
+                .checked_mul(2)
+                .ok_or(streamthumb_core::Error::IntegerOverflow {
+                    operation: "16-bit grayscale sample offset",
+                })?;
+            let end = start
+                .checked_add(2)
+                .ok_or(streamthumb_core::Error::IntegerOverflow {
+                    operation: "16-bit grayscale sample end",
+                })?;
+            let bytes = source.get(start..end).ok_or_else(|| {
+                Error::DecodeFailure("16-bit grayscale row ended within a sample".to_owned())
+            })?;
+            u16::from_be_bytes([bytes[0], bytes[1]])
+        }
+        _ => {
+            return Err(Error::Unsupported {
+                feature: UnsupportedFeature::BitDepth,
+                detail: "unsupported grayscale bit depth",
+            });
+        }
+    };
+    let maximum = grayscale_sample_maximum(bits)?;
+    let scaled = (u32::from(raw) * 255 + maximum / 2) / maximum;
+    let gray = u8::try_from(scaled).map_err(|_| streamthumb_core::Error::IntegerOverflow {
+        operation: "grayscale sample normalization",
+    })?;
+    let alpha = if transparent == Some(raw) { 0 } else { u8::MAX };
+    Ok([gray, gray, gray, alpha])
 }
 
 fn bit_depth_bits(depth: BitDepth) -> Result<usize> {
@@ -838,6 +1033,109 @@ mod tests {
             packed[bit_offset / 8] |= (value & mask) << shift;
         }
         packed
+    }
+
+    fn pack_grayscale_row(samples: &[u16], depth: BitDepth) -> Vec<u8> {
+        match depth {
+            BitDepth::One | BitDepth::Two | BitDepth::Four => {
+                let samples = samples
+                    .iter()
+                    .map(|sample| u8::try_from(*sample).unwrap())
+                    .collect::<Vec<_>>();
+                pack_palette_row(&samples, depth)
+            }
+            BitDepth::Eight => samples
+                .iter()
+                .map(|sample| u8::try_from(*sample).unwrap())
+                .collect(),
+            BitDepth::Sixteen => samples
+                .iter()
+                .flat_map(|sample| sample.to_be_bytes())
+                .collect(),
+        }
+    }
+
+    fn encode_grayscale_png(
+        width: u32,
+        height: u32,
+        depth: BitDepth,
+        samples: &[u16],
+        transparency: Option<u16>,
+    ) -> Vec<u8> {
+        let width_usize = usize::try_from(width).unwrap();
+        let mut packed = Vec::new();
+        for row in samples.chunks_exact(width_usize) {
+            packed.extend_from_slice(&pack_grayscale_row(row, depth));
+        }
+        assert_eq!(
+            samples.len(),
+            width_usize * usize::try_from(height).unwrap()
+        );
+
+        let mut encoded = Vec::new();
+        let mut encoder = png::Encoder::new(&mut encoded, width, height);
+        encoder.set_color(ColorType::Grayscale);
+        encoder.set_depth(depth);
+        if let Some(transparency) = transparency {
+            encoder.set_trns(transparency.to_be_bytes().to_vec());
+        }
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&packed).unwrap();
+        writer.finish().unwrap();
+        encoded
+    }
+
+    fn encode_adam7_grayscale_png(
+        width: u32,
+        height: u32,
+        depth: BitDepth,
+        samples: &[u16],
+        transparency: Option<u16>,
+    ) -> Vec<u8> {
+        let mut filtered = Vec::new();
+        for pass in ADAM7_PASSES {
+            let pass_samples = pass_sample_count(width, pass.x_offset, pass.x_stride);
+            let lines = pass_sample_count(height, pass.y_offset, pass.y_stride);
+            if pass_samples == 0 || lines == 0 {
+                continue;
+            }
+            for line in 0..lines {
+                filtered.push(0);
+                let y = pass.y_offset + line * pass.y_stride;
+                let mut row = Vec::new();
+                for sample in 0..pass_samples {
+                    let x = pass.x_offset + sample * pass.x_stride;
+                    let offset =
+                        usize::try_from(u64::from(y) * u64::from(width) + u64::from(x)).unwrap();
+                    row.push(samples[offset]);
+                }
+                filtered.extend_from_slice(&pack_grayscale_row(&row, depth));
+            }
+        }
+
+        let mut compressor = ZlibEncoder::new(Vec::new(), Compression::default());
+        compressor.write_all(&filtered).unwrap();
+        let compressed = compressor.finish().unwrap();
+        let mut encoded = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.push(match depth {
+            BitDepth::One => 1,
+            BitDepth::Two => 2,
+            BitDepth::Four => 4,
+            BitDepth::Eight => 8,
+            BitDepth::Sixteen => 16,
+        });
+        ihdr.push(0);
+        ihdr.extend_from_slice(&[0, 0, 1]);
+        append_chunk(&mut encoded, *b"IHDR", &ihdr);
+        if let Some(transparency) = transparency {
+            append_chunk(&mut encoded, *b"tRNS", &transparency.to_be_bytes());
+        }
+        append_chunk(&mut encoded, *b"IDAT", &compressed);
+        append_chunk(&mut encoded, *b"IEND", &[]);
+        encoded
     }
 
     fn encode_palette_png(
@@ -1074,31 +1372,109 @@ mod tests {
     }
 
     #[test]
-    fn rejects_separate_grayscale_transparency_before_rows() {
+    fn applies_separate_grayscale_transparency() {
         let mut encoded = Vec::new();
-        let mut encoder = png::Encoder::new(&mut encoded, 1, 1);
+        let mut encoder = png::Encoder::new(&mut encoded, 2, 1);
         encoder.set_color(ColorType::Grayscale);
         encoder.set_depth(BitDepth::Eight);
         encoder.set_trns(vec![0, 10]);
         let mut writer = encoder.write_header().unwrap();
-        writer.write_image_data(&[10]).unwrap();
+        writer.write_image_data(&[10, 11]).unwrap();
         writer.finish().unwrap();
-        let mut callbacks = 0;
+        let mut rgba = Vec::new();
 
-        let error = decode_png_rows(&encoded, &default_options(), |_| {
-            callbacks += 1;
+        decode_png_rows(&encoded, &default_options(), |row| {
+            rgba.extend_from_slice(row.pixels);
             Ok(())
         })
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(callbacks, 0);
-        assert!(matches!(
-            error,
-            Error::Unsupported {
-                feature: UnsupportedFeature::ColorType,
-                ..
-            }
-        ));
+        assert_eq!(rgba, [10, 10, 10, 0, 11, 11, 11, 255]);
+    }
+
+    #[test]
+    fn expands_packed_grayscale_depths_with_exact_scaling() {
+        let cases = [
+            (
+                BitDepth::One,
+                vec![0, 1],
+                1,
+                vec![0, 0, 0, 255, 255, 255, 255, 0],
+            ),
+            (
+                BitDepth::Two,
+                vec![0, 1, 2, 3],
+                2,
+                vec![
+                    0, 0, 0, 255, 85, 85, 85, 255, 170, 170, 170, 0, 255, 255, 255, 255,
+                ],
+            ),
+            (
+                BitDepth::Four,
+                vec![0, 7, 8, 15],
+                7,
+                vec![
+                    0, 0, 0, 255, 119, 119, 119, 0, 136, 136, 136, 255, 255, 255, 255, 255,
+                ],
+            ),
+        ];
+
+        for (depth, samples, transparent, expected) in cases {
+            let encoded = encode_grayscale_png(
+                u32::try_from(samples.len()).unwrap(),
+                1,
+                depth,
+                &samples,
+                Some(transparent),
+            );
+            let mut actual = Vec::new();
+            let info = decode_png_rows(&encoded, &default_options(), |row| {
+                actual.extend_from_slice(row.pixels);
+                Ok(())
+            })
+            .unwrap();
+
+            assert_eq!(actual, expected, "packed grayscale mismatch at {depth:?}");
+            assert_eq!(info.plan.memory.decoder_rows_bytes, (samples.len() + 1) * 3);
+        }
+    }
+
+    #[test]
+    fn applies_sixteen_bit_grayscale_transparency_before_scaling() {
+        let encoded =
+            encode_grayscale_png(3, 1, BitDepth::Sixteen, &[0, 32_768, 65_535], Some(32_768));
+        let mut rgba = Vec::new();
+        decode_png_rows(&encoded, &default_options(), |row| {
+            rgba.extend_from_slice(row.pixels);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(rgba, [0, 0, 0, 255, 128, 128, 128, 0, 255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn rejects_invalid_grayscale_transparency_before_rows() {
+        let mut malformed_length = Vec::new();
+        let mut encoder = png::Encoder::new(&mut malformed_length, 1, 1);
+        encoder.set_color(ColorType::Grayscale);
+        encoder.set_depth(BitDepth::Eight);
+        encoder.set_trns(vec![7]);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[7]).unwrap();
+        writer.finish().unwrap();
+        let out_of_range = encode_grayscale_png(1, 1, BitDepth::Two, &[0], Some(4));
+
+        for encoded in [malformed_length, out_of_range] {
+            let mut callbacks = 0;
+            assert!(
+                decode_png_rows(&encoded, &default_options(), |_| {
+                    callbacks += 1;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert_eq!(callbacks, 0);
+        }
     }
 
     #[test]
@@ -1235,6 +1611,42 @@ mod tests {
             assert_eq!(
                 thumbnail_png_rgba(&adam7, &options).unwrap(),
                 thumbnail_png_rgba(&sequential, &options).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn adam7_grayscale_depths_and_transparency_match_non_interlaced() {
+        for depth in [
+            BitDepth::One,
+            BitDepth::Two,
+            BitDepth::Four,
+            BitDepth::Eight,
+            BitDepth::Sixteen,
+        ] {
+            let bits = grayscale_depth_bits(depth);
+            let maximum = u16::try_from(grayscale_sample_maximum(bits).unwrap()).unwrap();
+            let transparent = maximum / 2;
+            let width = 13_u32;
+            let height = 10_u32;
+            let samples = (0..width * height)
+                .map(|index| {
+                    u16::try_from((u32::from(maximum) + 1 + index * 17) % (u32::from(maximum) + 1))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let sequential =
+                encode_grayscale_png(width, height, depth, &samples, Some(transparent));
+            let adam7 =
+                encode_adam7_grayscale_png(width, height, depth, &samples, Some(transparent));
+            let mut options = default_options();
+            options.max_width = 6;
+            options.max_height = 5;
+
+            assert_eq!(
+                thumbnail_png_rgba(&adam7, &options).unwrap(),
+                thumbnail_png_rgba(&sequential, &options).unwrap(),
+                "grayscale Adam7 mismatch at {depth:?}"
             );
         }
     }

@@ -1146,3 +1146,13 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 5. The decoder remains in identity transformation mode. Streamthumb validates source sample lengths and performs the documented conversion itself for deterministic native and WebAssembly output.
 6. Tests cover exact representative rounding values, all four direct color types, 8-byte RGBA16 decoder-row accounting, non-interlaced versus Adam7 equivalence, and truncated 16-bit Adam7 input.
 7. Sixteen-bit support flows through the existing Rust row callback, thumbnail, CLI, and WASM APIs. Separate grayscale/RGB `tRNS` transparency and APNG remain unsupported.
+
+### Phase 12 decisions
+
+1. Grayscale input now accepts every PNG-defined depth: 1, 2, 4, 8, and 16 bits, in both non-interlaced and Adam7 forms.
+2. Packed grayscale samples are extracted most-significant-bit first with row padding discarded independently for every source or pass row. Values are scaled to 8-bit by nearest-integer mapping over the source depth's full range.
+3. Grayscale `tRNS` is supported at every grayscale depth. Transparency comparison uses the original unscaled sample, avoiding collisions introduced by 8-bit normalization.
+4. Raw direct-color `tRNS` chunk lengths are checked before metadata normalization because the codec shortens sub-16-bit transparency values internally. Grayscale requires exactly two encoded bytes; malformed lengths and values outside the declared sample depth fail before rows are exposed.
+5. Packed grayscale memory planning conservatively reserves one source byte per pixel plus the existing RGBA normalization row. Eight- and sixteen-bit grayscale reserve one and two source bytes per pixel respectively.
+6. Tests cover exact 1-, 2-, and 4-bit scaling, row padding, 8- and 16-bit grayscale transparency, all grayscale depths in Adam7 order, malformed `tRNS` lengths, out-of-range transparent samples, and packed-row memory accounting.
+7. Low-bit grayscale and grayscale transparency flow through the existing Rust row callback, thumbnail, CLI, and WASM APIs. RGB `tRNS` and APNG remain unsupported.
