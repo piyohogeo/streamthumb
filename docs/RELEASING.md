@@ -7,8 +7,9 @@ This project publishes the browser-targeted WebAssembly package as
 
 1. Choose a semantic version and update `workspace.package.version` in the
    root `Cargo.toml`.
-2. Move the relevant entries in `CHANGELOG.md` from `Unreleased` to a heading
-   for the new version and release date.
+2. Move the relevant entries in `CHANGELOG.md` under a matching
+   `## [X.Y.Z] - Unreleased` heading. Replace `Unreleased` with the release
+   date only when the release is finalized.
 3. Run the full Rust and WebAssembly test suite.
 4. Create `target/npm-artifacts`, then build and inspect the npm package:
 
@@ -20,8 +21,20 @@ This project publishes the browser-targeted WebAssembly package as
 
 5. Commit the version and changelog, push it, explicitly dispatch CI, and wait
    for both the push-triggered and manually dispatched runs to pass.
-6. Download the `npm-package` artifact and inspect the tarball before creating
-   a signed `vX.Y.Z` tag and GitHub release.
+6. Explicitly dispatch the `Release Candidate` workflow for the same commit.
+   This workflow uses pinned Rust, Node.js, npm, and wasm-pack versions and
+   produces one `npm-release-candidate` artifact.
+7. Empty `target/npm-artifacts`, download the release candidate files into it,
+   and verify the source revision, manifest, file size, and SHA-256 checksum:
+
+   ```text
+   node scripts/release-manifest.mjs check \
+     --artifact-only \
+     --source-revision FULL_COMMIT_SHA
+   ```
+
+8. Inspect the verified tarball before creating a signed `vX.Y.Z` tag and
+   GitHub release.
 
 ## Publish to npm
 

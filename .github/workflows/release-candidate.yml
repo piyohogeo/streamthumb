@@ -1,0 +1,43 @@
+name: Release Candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  npm-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2.85.9
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.14.1
+      - name: Verify clean source checkout
+        run: test -z "$(git status --porcelain)"
+      - run: node scripts/build-npm-package.mjs
+      - run: node scripts/check-npm-package.mjs
+      - run: mkdir -p target/npm-artifacts && npm pack ./target/npm-package --pack-destination target/npm-artifacts
+      - name: Create and verify release manifest
+        run: |
+          node scripts/release-manifest.mjs create --source-revision '${{ github.sha }}'
+          node scripts/release-manifest.mjs check --source-revision '${{ github.sha }}'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-release-candidate
+          path: target/npm-artifacts/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

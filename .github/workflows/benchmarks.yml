@@ -35,7 +35,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: taiki-e/install-action@wasm-pack
+      - uses: taiki-e/install-action@v2.85.9
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
       - run: bash benchmarks/run-wasm.sh "${{ inputs.profile }}" 512
       - uses: actions/upload-artifact@v7
         with:

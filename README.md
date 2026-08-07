@@ -34,6 +34,9 @@ contents, installs it into an empty consumer project, checks its TypeScript
 declarations, bundles it with pinned esbuild, exercises it in Chrome, and then
 stores the unpublished tarball as the `npm-package` artifact.
 See [docs/RELEASING.md](docs/RELEASING.md) for the manual release process.
+The manually dispatched `Release Candidate` workflow additionally records the
+source revision, pinned build tools, byte size, and SHA-256 checksum without
+publishing, tagging, or creating a GitHub release.
 
 ## Positioning
 

@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file. The
 project follows Semantic Versioning.
 
-## Unreleased
+## [0.1.0] - Unreleased
 
 ### Added
 
@@ -16,3 +16,5 @@ project follows Semantic Versioning.
   automatic WebAssembly loading, thumbnail generation, and PNG decoding.
 - Strict TypeScript declarations for thumbnail options and literal values,
   validated through a pinned TypeScript and esbuild consumer build.
+- A pinned release-candidate workflow that records and verifies the source
+  revision, package size, and SHA-256 checksum before any release action.

@@ -38,7 +38,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: taiki-e/install-action@wasm-pack
+      - uses: taiki-e/install-action@v2.85.9
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -62,7 +65,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: taiki-e/install-action@wasm-pack
+      - uses: taiki-e/install-action@v2.85.9
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
       - uses: browser-actions/setup-chrome@v2
         id: chrome
         with:

@@ -1205,3 +1205,12 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 3. The package checker requires the public option declarations and exactly one typed `thumbnailPng` signature in every generated package.
 4. The tarball consumer pins TypeScript 7.0.2 and esbuild 0.28.1 in a dedicated lockfile. These tools remain test-only dependencies outside the published package.
 5. CI runs strict type checking, including negative literal and property tests, bundles the TypeScript entry point as an ES module, and executes the resulting bundle in Chrome.
+
+### Phase 19 decisions
+
+1. A manually dispatched release-candidate workflow builds the npm tarball without publishing, tagging, or creating a GitHub release.
+2. Release-candidate builds pin Rust 1.85.0, Node.js 24.14.1 with npm 11.11.0, wasm-pack 0.15.0, and install-action 2.85.9. Normal package, browser, and benchmark workflows use the same pinned wasm-pack installer.
+3. The workspace version, generated npm version, tarball filename, and versioned changelog heading must agree before a manifest can be created.
+4. The release manifest records package identity, source revision, exact tool versions, tarball byte size, and SHA-256. A conventional `.sha256` file is generated alongside it.
+5. Manifest verification recomputes the hash and size, checks the source revision and pinned tools, and rejects unexpected files in the release-candidate artifact directory.
+6. The release-candidate artifact contains exactly the tarball, JSON manifest, and checksum file. It is retained for 30 days for independent inspection.
