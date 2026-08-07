@@ -58,12 +58,13 @@ WebAssembly file measured 454,856 bytes with SHA-256
 `b813aab4ee219f1f11a5a4b722b9ba3ebd6ab24e013598a46bca93d600d1e18c`.
 
 The most recent pinned Rust 1.85 release-candidate build measured 202,905
-packed bytes and 544,090 unpacked bytes with tarball SHA-256
-`c6764031da5b5fa9f211dfed76671ee4dfd7f933a5a5b9bdfddb10582a9de9fd`.
-Package inspection enforces a 550,000-byte ceiling. Native `Read + Seek` support
-is separated from WebAssembly slice monomorphization so the package remains
-within that ceiling. These values are descriptive; the pinned
-release-candidate manifest is authoritative for any future release.
+packed bytes and 544,090 unpacked bytes. Its release manifest records and
+verifies the tarball SHA-256 for that exact artifact; a separately rebuilt
+tarball is not substituted during publication. Package inspection enforces a
+550,000-byte ceiling. Native `Read + Seek` support is separated from
+WebAssembly slice monomorphization so the package remains within that ceiling.
+These values are descriptive; the pinned release-candidate manifest is
+authoritative for any future release.
 
 ## License and dependency audit
 
