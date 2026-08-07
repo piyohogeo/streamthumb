@@ -145,10 +145,8 @@ the decoder constraint that still blocks a genuine asynchronous
 See [docs/RELEASING.md](docs/RELEASING.md) for the manual release process.
 The [version 0.2.0 release-readiness audit](docs/RELEASE_READINESS.md) records
 the candidate package contents, dependency licenses, size budget, and required
-automated gates. The latest published version remains
-[v0.1.0 on GitHub Releases](https://github.com/piyohogeo/streamthumb/releases/tag/v0.1.0)
-until the verified v0.2.0 candidate is explicitly approved, tagged, and
-released.
+automated gates. The latest published version is
+[v0.2.0 on GitHub Releases](https://github.com/piyohogeo/streamthumb/releases/tag/v0.2.0).
 The manually dispatched `Release Candidate` workflow additionally records the
 source revision, pinned build tools, byte size, and SHA-256 checksum without
 publishing, tagging, or creating a GitHub release.

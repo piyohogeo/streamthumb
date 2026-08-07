@@ -2,8 +2,8 @@
 
 This document records the release-readiness evidence for version 0.2.0 after
 the browser seekable-input, memory-preflight, and GitHub Pages extensions.
-Version 0.2.0 is an unreleased GitHub-only candidate. npm and crates.io
-publication remain outside its scope.
+Version 0.2.0 is a published GitHub-only release. npm and crates.io publication
+remain outside its scope.
 
 ## Automated gates
 
@@ -78,13 +78,31 @@ tarball includes both project license texts.
 This inventory is a release engineering check, not legal advice. Dependency
 changes require the metadata audit to be repeated.
 
-## Candidate outcome
+## Release outcome
 
-Version 0.2.0 has not been tagged or published. Before release, the exact
-version commit must pass push-triggered CI plus explicitly dispatched CI, Fuzz,
-Benchmarks, Release Candidate, and Pages workflows. The candidate artifact must
-then be downloaded and verified against its source revision, manifest, byte
-size, and SHA-256 before a signed tag or GitHub Release is created.
+Version 0.2.0 is published as a
+[GitHub Release](https://github.com/piyohogeo/streamthumb/releases/tag/v0.2.0)
+from signed tag `v0.2.0`. GitHub reports the SSH signature as verified, and the
+tag points to commit `21dba22f98352f672438afebd1ab1f7e0abbce8d`.
+
+The release contains the exact pinned candidate tarball, its checksum file, and
+`release-manifest.json`. The tarball is 208,434 bytes with SHA-256
+`a5337c34c4cfe9413db37c0c54e6da36555fb8de496fd2b8c8639ec46d997a52`.
+The artifact came from
+[Release Candidate run 31214032704](https://github.com/piyohogeo/streamthumb/actions/runs/31214032704)
+and was verified locally against the complete source revision before tagging.
+
+The tagged revision passed explicitly dispatched
+[CI](https://github.com/piyohogeo/streamthumb/actions/runs/31214302627),
+[Fuzz](https://github.com/piyohogeo/streamthumb/actions/runs/31214303009),
+[Benchmarks](https://github.com/piyohogeo/streamthumb/actions/runs/31214300900), and
+[Release Candidate](https://github.com/piyohogeo/streamthumb/actions/runs/31214302816)
+workflows. The tag-referenced Pages build and Chrome test passed, but deployment
+was correctly rejected by the environment's main-branch protection rule. The
+same revision then passed and deployed through the explicitly dispatched
+[main-branch Pages run](https://github.com/piyohogeo/streamthumb/actions/runs/31214425261).
+npm and crates.io publication remain deferred and require separate explicit
+authorization.
 
 Version 0.1.0 remains published as a
 [GitHub Release](https://github.com/piyohogeo/streamthumb/releases/tag/v0.1.0)
