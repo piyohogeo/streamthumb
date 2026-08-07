@@ -125,6 +125,16 @@ for (const file of publicExampleFiles) {
   if (text.includes("../../pkg") || text.includes("repository-level `pkg`")) {
     throw new Error(`${file} contains a retired package path`);
   }
+  for (const unavailableRegistryCommand of [
+    "npm install @streamthumb/wasm",
+    "deno add npm:@streamthumb/wasm",
+  ]) {
+    if (text.includes(unavailableRegistryCommand)) {
+      throw new Error(
+        `${file} presents an unpublished registry package as available: ${unavailableRegistryCommand}`,
+      );
+    }
+  }
 }
 
 const browserWorker = await source("examples/browser/worker.js");
@@ -138,6 +148,13 @@ requireText(browserWorker, "thumbnailPngToChunks", "examples/browser/worker.js")
 const pagesIndex = await source("examples/pages/index.html");
 for (const uiDefault of [
   "<h1>streamthumb / WebAssembly demo</h1>",
+  '<meta property="og:title" content="streamthumb / WebAssembly demo" />',
+  'property="og:description"',
+  '<meta property="og:type" content="website" />',
+  '<meta property="og:url" content="https://piyohogeo.github.io/streamthumb/" />',
+  '<meta name="twitter:card" content="summary" />',
+  '<meta name="twitter:title" content="streamthumb / WebAssembly demo" />',
+  'name="twitter:description"',
   "The image is never uploaded to a server.",
   'id="max-width" type="number" min="1" max="8192" value="512"',
   'id="max-height" type="number" min="1" max="8192" value="512"',

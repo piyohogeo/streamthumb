@@ -4,9 +4,18 @@ WebAssembly bindings for the memory-bounded `streamthumb` PNG-input thumbnail pi
 
 ## Installation
 
-```text
-npm install @streamthumb/wasm
+Version 0.2.0 is distributed only through
+[GitHub Releases](https://github.com/piyohogeo/streamthumb/releases/tag/v0.2.0).
+It is not published to the npm registry or crates.io. Download
+`streamthumb-wasm-0.2.0.tgz` from that release, then install the local tarball:
+
+```sh
+npm install ./streamthumb-wasm-0.2.0.tgz
 ```
+
+The installed package name, and the name reserved for a possible future npm
+publication, is `@streamthumb/wasm`. Imports therefore use that package name as
+shown below even when installation uses the downloaded tarball.
 
 ## API
 
@@ -163,8 +172,8 @@ Runnable source examples are available for
 
 ## Repository development
 
-Run these commands from the repository root to build and inspect the
-unpublished package:
+Run these commands from the repository root to build and inspect the package
+from source:
 
 ```text
 node scripts/build-npm-package.mjs

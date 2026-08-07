@@ -80,7 +80,10 @@ if (JSON.stringify(manifest.keywords) !== JSON.stringify(expectedKeywords)) {
 }
 
 for (const expected of [
-  "npm install @streamthumb/wasm",
+  "Version 0.2.0 is distributed only through",
+  "It is not published to the npm registry or crates.io.",
+  "npm install ./streamthumb-wasm-0.2.0.tgz",
+  "possible future npm",
   "result.free();",
   "https://github.com/piyohogeo/streamthumb/blob/main/docs/WASM_API.md",
   "## Node.js and Deno",

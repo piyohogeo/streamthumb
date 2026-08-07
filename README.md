@@ -4,6 +4,22 @@
 
 The project currently implements checked thumbnail geometry, resource-limit validation, conservative working-memory planning, and bounded PNG thumbnail paths for non-interlaced and Adam7 1/2/4/8/16-bit grayscale, 8/16-bit grayscale-alpha, RGB, and RGBA files, plus 1/2/4/8-bit palette files. Palette, grayscale, and RGB `tRNS` transparency are supported. Encoded PNG and JPEG rows flow directly from the resampler into bounded encoders without a complete resized RGBA frame; raw RGBA, native CLI, and WebAssembly APIs remain available.
 
+## Installation and distribution
+
+Version 0.2.0 is a GitHub-only release. Neither the WebAssembly package nor the
+Rust crates are published to the npm registry or crates.io. Download
+[`streamthumb-wasm-0.2.0.tgz`](https://github.com/piyohogeo/streamthumb/releases/download/v0.2.0/streamthumb-wasm-0.2.0.tgz)
+from the [v0.2.0 GitHub Release](https://github.com/piyohogeo/streamthumb/releases/tag/v0.2.0),
+then install the downloaded tarball:
+
+```sh
+npm install ./streamthumb-wasm-0.2.0.tgz
+```
+
+The installed package name, and the name intended for a possible future npm
+publication, is `@streamthumb/wasm`. To build the package from source instead,
+use the commands in the [WebAssembly section](#webassembly).
+
 ## Workspace
 
 - `streamthumb-core`: platform-independent options, limits, geometry, errors, and processing plans
