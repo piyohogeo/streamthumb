@@ -15,10 +15,10 @@ version 0.1.0 before publication.
 | Premultiplied-alpha filtering | Complete | Transparent-edge and fully transparent pixel tests verify straight-alpha output without color halos. |
 | Malformed and oversized input rejection | Complete | Typed error tests cover truncation, malformed chunks, APNG, byte, dimension, pixel, output, decoder-memory, and working-memory limits. Fuzz targets cover rows, thumbnails, and the area downsampler. |
 | Configurable resource limits | Complete | Rust and WebAssembly APIs expose every required input, output, and working-memory limit. Defaults and documentation are checked together in CI. |
-| Rust-native CLI | Complete | `streamthumb-cli` produces bounded encoded PNG or JPEG output and validates codec-specific arguments and input size. |
+| Rust-native CLI | Complete | `streamthumb-cli` produces bounded encoded PNG or JPEG output, validates codec-specific arguments and input size, and replaces destinations only after staged output succeeds. |
 | PNG encoder configuration | Complete | Rust, WebAssembly, and CLI APIs expose 8-bit color mode, compression, and filter settings. Tests verify IHDR color types, decoded pixels, every compression/filter combination, Adam7 input, defaults, and invalid boundary values. |
 | JPEG output | Complete | Rust, WebAssembly, and CLI APIs expose baseline sequential JPEG with quality, compositing background, and 4:2:0/4:2:2/4:4:4 controls. Independent decoding covers ordered and Adam7 inputs, multiple MCU rows, quality 100, and limits. |
-| Browser WebAssembly package | Complete | Chrome and Firefox run worker-based wasm-bindgen tests. A separately installed tarball consumer and the public browser example run in headless Chrome. |
+| Browser WebAssembly package | Complete | Chrome and Firefox run worker-based wasm-bindgen tests, including chunked PNG/JPEG output. A separately installed tarball consumer and the public browser example run in headless Chrome. |
 | Node.js and Deno package use | Complete | CI installs the tarball into an isolated consumer and runs the public examples with explicit WebAssembly bytes. |
 | Cloudflare Worker adapter | Source complete; runtime deferred | The runtime-neutral adapter and local package reference are checked. Live-account validation is intentionally excluded because no Cloudflare account is available. |
 | Memory and comparison benchmarks | Complete for current baselines | Reproducible native and WebAssembly measurements compare streamthumb with a full-frame image-rs baseline and pinned jSquash packages. |
@@ -65,8 +65,15 @@ The optional native output stage adds PNG and JPEG APIs that take ownership of
 an `std::io::Write` implementation and return `ThumbnailInfo`. The byte cap is
 still enforced as encoded chunks are forwarded, while memory planning records
 zero retained encoded-result bytes. The CLI uses this path for direct file
-output. Existing owned-byte Rust APIs and the WebAssembly contract remain
-unchanged.
+output. The CLI writes to a same-directory staging file and commits it only
+after the encoder and writer succeed.
+
+The WebAssembly output stage adds `thumbnailPngToChunks`. It synchronously
+delivers encoded PNG or JPEG output in chunks of at most 64 KiB and returns
+metadata without retaining the complete encoded result in WebAssembly. The
+working-memory plan includes the adapter buffer; JavaScript-owned chunk copies
+remain outside the WebAssembly budget. Raw RGBA remains available only through
+the owned-result API.
 
 ## Explicit limitations and deferred work
 

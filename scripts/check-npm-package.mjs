@@ -113,7 +113,12 @@ const declarationContract = [
   'export type JpegSubsampling = "420" | "422" | "444";',
   "export interface JpegOptions",
   "options?: ThumbnailOptions | null,",
+  "export type ThumbnailChunkCallback = (chunk: Uint8Array) => void;",
+  "onChunk: ThumbnailChunkCallback,",
   "export class ThumbnailResult",
+  "export class ChunkedThumbnailResult",
+  "readonly bytesWritten: number;",
+  "readonly chunkCount: number;",
   "[Symbol.dispose](): void;",
   "export function streamthumbVersion(): string;",
   "export function wasmMemoryBytes(): number;",
@@ -127,6 +132,9 @@ for (const expected of declarationContract) {
 }
 if ((declarations.match(/export function thumbnailPng\(/g) ?? []).length !== 1) {
   throw new Error("TypeScript declarations must export exactly one thumbnailPng signature.");
+}
+if ((declarations.match(/export function thumbnailPngToChunks\(/g) ?? []).length !== 1) {
+  throw new Error("TypeScript declarations must export exactly one thumbnailPngToChunks signature.");
 }
 
 const npmCommand = process.platform === "win32"

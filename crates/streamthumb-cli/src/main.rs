@@ -1,4 +1,13 @@
-use std::{env, error::Error, fmt, fs, io::BufWriter, path::PathBuf, process::ExitCode};
+use std::{
+    env,
+    error::Error,
+    fmt, fs,
+    fs::{File, OpenOptions},
+    io::BufWriter,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use streamthumb_core::{Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
@@ -28,8 +37,8 @@ fn run() -> Result<(), CliError> {
     }
 
     let input = fs::read(&config.input)?;
-    let output_file = fs::File::create(&config.output)?;
-    let output = BufWriter::new(output_file);
+    let mut staged = StagedOutput::create(&config.output)?;
+    let output = BufWriter::new(staged.take_file()?);
     match config.options.output {
         OutputFormat::Png => {
             thumbnail_png_to_writer_with_encoder_options(
@@ -49,7 +58,110 @@ fn run() -> Result<(), CliError> {
         }
         OutputFormat::Rgba => unreachable!("the CLI does not expose raw RGBA output"),
     }
+    staged.commit(&config.output)?;
     Ok(())
+}
+
+static STAGING_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+
+struct StagedOutput {
+    path: Option<PathBuf>,
+    file: Option<File>,
+}
+
+impl StagedOutput {
+    fn create(destination: &Path) -> Result<Self, CliError> {
+        let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+        let file_name = destination
+            .file_name()
+            .ok_or_else(|| CliError::Message("output path must name a file".to_owned()))?;
+        for _ in 0..1_000 {
+            let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = parent.join(format!(
+                ".{}.streamthumb-{}-{sequence}.tmp",
+                file_name.to_string_lossy(),
+                std::process::id(),
+            ));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => {
+                    return Ok(Self {
+                        path: Some(path),
+                        file: Some(file),
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(CliError::Message(
+            "could not allocate a unique staging output path".to_owned(),
+        ))
+    }
+
+    fn take_file(&mut self) -> Result<File, CliError> {
+        self.file.take().ok_or_else(|| {
+            CliError::Message("internal error: staging output file was already taken".to_owned())
+        })
+    }
+
+    fn commit(mut self, destination: &Path) -> Result<(), CliError> {
+        let staging = self.path.take().ok_or_else(|| {
+            CliError::Message("internal error: staging output path is missing".to_owned())
+        })?;
+        match fs::rename(&staging, destination) {
+            Ok(()) => return Ok(()),
+            Err(first_error) => {
+                if !matches!(
+                    fs::symlink_metadata(destination),
+                    Ok(metadata) if metadata.file_type().is_file()
+                ) {
+                    self.path = Some(staging);
+                    return Err(first_error.into());
+                }
+            }
+        }
+
+        let backup = unique_unused_path(destination, "backup")?;
+        fs::rename(destination, &backup)?;
+        if let Err(error) = fs::rename(&staging, destination) {
+            let _ = fs::rename(&backup, destination);
+            self.path = Some(staging);
+            return Err(error.into());
+        }
+        if let Err(error) = fs::remove_file(&backup) {
+            return Err(error.into());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for StagedOutput {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn unique_unused_path(destination: &Path, role: &str) -> Result<PathBuf, CliError> {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = destination
+        .file_name()
+        .ok_or_else(|| CliError::Message("output path must name a file".to_owned()))?;
+    for _ in 0..1_000 {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(
+            ".{}.streamthumb-{role}-{}-{sequence}.tmp",
+            file_name.to_string_lossy(),
+            std::process::id(),
+        ));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(CliError::Message(format!(
+        "could not allocate a unique {role} path"
+    )))
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -298,6 +410,17 @@ impl From<streamthumb_png::Error> for CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn test_directory(name: &str) -> PathBuf {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "streamthumb-cli-{name}-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
 
     #[test]
     fn parses_dimensions_and_upscale_flag() {
@@ -409,5 +532,36 @@ mod tests {
         );
         assert!(Config::parse(["in", "out", "--png-filter"].map(str::to_owned)).is_err());
         assert!(Config::parse(["in.png", "out.png", "--fit", "crop"].map(str::to_owned)).is_err());
+    }
+
+    #[test]
+    fn abandoned_staging_output_preserves_the_destination() {
+        let directory = test_directory("abandon");
+        let destination = directory.join("thumbnail.png");
+        fs::write(&destination, b"original").unwrap();
+        let staging_path;
+        {
+            let mut staged = StagedOutput::create(&destination).unwrap();
+            staging_path = staged.path.clone().unwrap();
+            staged.take_file().unwrap().write_all(b"partial").unwrap();
+        }
+
+        assert_eq!(fs::read(&destination).unwrap(), b"original");
+        assert!(!staging_path.exists());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn committed_staging_output_replaces_the_destination() {
+        let directory = test_directory("commit");
+        let destination = directory.join("thumbnail.png");
+        fs::write(&destination, b"original").unwrap();
+        let mut staged = StagedOutput::create(&destination).unwrap();
+        staged.take_file().unwrap().write_all(b"complete").unwrap();
+        staged.commit(&destination).unwrap();
+
+        assert_eq!(fs::read(&destination).unwrap(), b"complete");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
     }
 }

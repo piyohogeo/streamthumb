@@ -62,9 +62,10 @@ supports 4:2:0, 4:2:2, and 4:4:4 subsampling. Direct native output uses
 `thumbnail_jpeg_to_writer` or `thumbnail_jpeg_to_writer_with_options`.
 
 The CLI uses the direct writer APIs for both codecs, so it writes encoded bytes
-to the destination file without retaining a second complete encoded copy.
+to a same-directory staging file without retaining a second complete encoded
+copy. It replaces the destination only after encoding and flushing succeed.
 Writer APIs take ownership of the writer and return `ThumbnailInfo`; existing
-buffer-returning APIs and the WebAssembly API remain unchanged.
+buffer-returning APIs remain available.
 
 ## WebAssembly
 
@@ -75,7 +76,14 @@ node scripts/build-npm-package.mjs
 node scripts/check-npm-package.mjs
 ```
 
-The exported `thumbnailPng(inputBytes, options)` function works without DOM, Canvas, filesystem, threads, or `SharedArrayBuffer` APIs. See [the WebAssembly API contract](docs/WASM_API.md) and the examples for [browsers](examples/browser), [Node.js](examples/node), [Deno](examples/deno), and [Cloudflare Workers](examples/cloudflare-worker).
+The exported `thumbnailPng(inputBytes, options)` function returns owned bytes.
+`thumbnailPngToChunks(inputBytes, onChunk, options)` instead delivers encoded
+PNG or JPEG output synchronously in chunks of at most 64 KiB, avoiding a
+complete encoded result in WebAssembly memory. Both work without DOM, Canvas,
+filesystem, threads, or `SharedArrayBuffer` APIs. See [the WebAssembly API
+contract](docs/WASM_API.md) and the examples for [browsers](examples/browser),
+[Node.js](examples/node), [Deno](examples/deno), and [Cloudflare
+Workers](examples/cloudflare-worker).
 
 The generated package is prepared as `@streamthumb/wasm` in
 `target/npm-package`. Normal CI validates its metadata and exact tarball

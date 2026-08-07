@@ -1,13 +1,13 @@
 # Release readiness audit
 
 This document records the pre-publication audit for version 0.1.0 after the
-centered-cover and direct-writer extensions. It is evidence that release inputs
+centered-cover, direct-writer, and WebAssembly chunk-output extensions. It is evidence that release inputs
 can be assembled and verified; it is not authorization to publish, tag, or
 create a release.
 
 ## Automated gates
 
-- Normal CI checks formatting, clippy with warnings denied, 115 native tests,
+- Normal CI checks formatting, clippy with warnings denied, 121 native tests,
   the wasm32 build, Chrome and Firefox tests, installed npm tarball consumers
   in browsers, Node.js, and Deno, benchmark tooling, and all Rust packages.
 - Scheduled and manually dispatched fuzzing covers row decoding, all thumbnail
@@ -18,10 +18,12 @@ create a release.
 
 ## Rust package audit
 
-`cargo package --workspace` assembles and build-verifies the five workspace
-packages through Cargo's temporary local registry. Internal dependencies carry
-both a path for workspace development and the exact `0.1.0` version needed in
-published manifests.
+`cargo package --workspace --no-verify` assembles the five workspace package
+archives. The normal CI job separately compiles and tests the complete local
+workspace. Archive verification is deferred because Cargo removes internal
+path dependencies before verification and these exact `0.1.0` packages are not
+yet available from crates.io. Internal dependencies carry both a path for
+workspace development and the exact version needed in published manifests.
 
 The audited package archives contain only normalized manifests, lockfiles,
 VCS metadata, crate source, and the WebAssembly crate's README and generated
@@ -30,7 +32,9 @@ and repository-level design documents are excluded.
 
 Rust package publication is not part of the current npm release procedure.
 Publishing these crates would require a separate explicit decision and the
-dependency order `core`, `encode`, `png`, then `cli` and `wasm`.
+dependency order `core`, `encode`, `png`, then `cli` and `wasm`. Each downstream
+archive must be verified after its internal dependencies are available from
+crates.io.
 
 ## npm package audit
 
@@ -46,7 +50,7 @@ The local audit tarball contains exactly eight files:
 - `streamthumb_wasm_bg.wasm.d.ts`
 
 The package has no npm runtime dependencies. The local stable-toolchain audit
-measured 160,698 packed bytes and 372,019 unpacked bytes. These values are
+measured 189,503 packed bytes and 487,555 unpacked bytes. These values are
 descriptive; the pinned release-candidate manifest is authoritative for any
 future release.
 

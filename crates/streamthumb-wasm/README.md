@@ -11,7 +11,7 @@ npm install @streamthumb/wasm
 ## API
 
 ```js
-import init, { thumbnailPng } from "@streamthumb/wasm";
+import init, { thumbnailPng, thumbnailPngToChunks } from "@streamthumb/wasm";
 
 await init();
 
@@ -42,6 +42,25 @@ const bytes = result.bytes;
 result.free();
 ```
 
+Encoded output can instead be consumed synchronously in chunks of at most 64
+KiB. This avoids retaining the complete encoded result in WebAssembly:
+
+```js
+const chunks = [];
+const info = thumbnailPngToChunks(
+  inputBytes,
+  (chunk) => chunks.push(chunk),
+  { maxWidth: 512, maxHeight: 512, output: "jpeg" },
+);
+
+console.log(info.width, info.height, info.mimeType, info.bytesWritten);
+info.free();
+```
+
+Each chunk is a new JavaScript-owned `Uint8Array`. The callback is synchronous,
+has no asynchronous backpressure, and may throw to abort processing. Raw RGBA
+output remains available only through `thumbnailPng`.
+
 `output: "png"` returns encoded PNG bytes with MIME type `image/png`.
 `output: "jpeg"` returns baseline JPEG bytes with MIME type `image/jpeg`; a
 nested `jpeg` object configures quality, RGB alpha-compositing background, and
@@ -60,7 +79,8 @@ metadata.
 
 The package exports `ThumbnailOptions`, `ThumbnailFit`, `ThumbnailFilter`,
 `ThumbnailOutputFormat`, `PngOptions`, `PngColorMode`, `PngCompression`,
-`PngFilter`, `JpegOptions`, and `JpegSubsampling` TypeScript types. Every option is optional, and `thumbnailPng` also
+`PngFilter`, `JpegOptions`, `JpegSubsampling`, and `ThumbnailChunkCallback`
+TypeScript types. Every option is optional, and both thumbnail functions also
 accepts an omitted or `null` options value. PNG output remains RGBA8 by default;
 the nested `png` object can select automatic or explicit 8-bit color output,
 compression, and scanline filtering.

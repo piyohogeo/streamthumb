@@ -47,6 +47,28 @@ baseline. Both streamthumb codecs consume resized rows directly. The public
 convenience API still returns one complete encoded byte buffer, so the memory
 figures include encoded bytes but not a complete uncompressed output frame.
 
+### WebAssembly buffered versus chunk delivery
+
+A focused 2,048 x 2,048 high-entropy run compares the owned-byte API with a
+chunk callback that discards each chunk immediately. The input and PNG output
+are both 13.78 MiB; JPEG output is 3.32 MiB. These single-run measurements use
+the same source, encoder settings, fresh Node.js processes, and current Windows
+development environment.
+
+| Codec | Delivery | Runtime | Linear-memory high-water | Growth | Output |
+| --- | --- | ---: | ---: | ---: | ---: |
+| PNG | Buffered | 1,079.1 ms | 48.31 MiB | 47.19 MiB | 13.78 MiB |
+| PNG | Chunks | 1,074.5 ms | 16.13 MiB | 15.00 MiB | 13.78 MiB |
+| JPEG | Buffered | 523.6 ms | 24.00 MiB | 22.88 MiB | 3.32 MiB |
+| JPEG | Chunks | 526.8 ms | 15.94 MiB | 14.81 MiB | 3.32 MiB |
+
+Chunk delivery reduced the observed PNG high-water by 32.19 MiB and JPEG by
+8.06 MiB without a material runtime change in this run. The reduction exceeds
+one output copy because the buffered JavaScript result getter copies bytes out
+of WebAssembly while the original owned result is still live. Chunk callback
+storage belongs to the caller; retaining every chunk would move memory into the
+JavaScript heap and is intentionally not represented by this discard benchmark.
+
 ### Native, 2,048 maximum dimension
 
 | Input | Codec | Output dimensions | Runtime | Peak RSS | Encoded output |

@@ -1,10 +1,17 @@
 //! Runtime-neutral WebAssembly bindings for `streamthumb`.
 
-use js_sys::Reflect;
+use std::{
+    cell::RefCell,
+    io::{self, Write},
+    rc::Rc,
+};
+
+use js_sys::{Function, Reflect, Uint8Array};
 use streamthumb_core::{Filter, Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
     JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngOptions,
-    ThumbnailOutput, thumbnail_png as create_thumbnail,
+    ThumbnailOutput, thumbnail_jpeg_to_writer_with_options_and_buffer,
+    thumbnail_png as create_thumbnail, thumbnail_png_to_writer_with_encoder_options_and_buffer,
     thumbnail_png_with_encoder_options as create_thumbnail_with_png_options,
     thumbnail_png_with_jpeg_options as create_thumbnail_with_jpeg_options,
 };
@@ -74,7 +81,19 @@ export function thumbnailPng(
     input: Uint8Array,
     options?: ThumbnailOptions | null,
 ): ThumbnailResult;
+
+/** Receives one owned encoded-output chunk. */
+export type ThumbnailChunkCallback = (chunk: Uint8Array) => void;
+
+/** Creates encoded PNG or JPEG output without retaining the complete result. */
+export function thumbnailPngToChunks(
+    input: Uint8Array,
+    onChunk: ThumbnailChunkCallback,
+    options?: ThumbnailOptions | null,
+): ChunkedThumbnailResult;
 "#;
+
+const OUTPUT_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Returns the package version for bootstrap and packaging checks.
 #[wasm_bindgen(js_name = streamthumbVersion)]
@@ -105,6 +124,223 @@ pub fn thumbnail_png(input: &[u8], options: &JsValue) -> Result<ThumbnailResult,
     }
     .map_err(|error| JsError::new(&error.to_string()))?;
     ThumbnailResult::from_output(output)
+}
+
+/// Creates encoded output and forwards owned chunks to a JavaScript callback.
+#[wasm_bindgen(js_name = thumbnailPngToChunks, skip_typescript)]
+pub fn thumbnail_png_to_chunks(
+    input: &[u8],
+    on_chunk: &Function,
+    options: &JsValue,
+) -> Result<ChunkedThumbnailResult, JsValue> {
+    let (options, png_options, jpeg_options) = parse_options(options).map_err(JsValue::from)?;
+    if options.output == OutputFormat::Rgba {
+        return Err(JsError::new("chunk output requires PNG or JPEG output").into());
+    }
+
+    let callback_error = Rc::new(RefCell::new(None));
+    let stats = Rc::new(RefCell::new(ChunkStats::default()));
+    let writer = ChunkCallbackWriter::new({
+        let on_chunk = on_chunk.clone();
+        let callback_error = Rc::clone(&callback_error);
+        let stats = Rc::clone(&stats);
+        move |chunk: &[u8]| {
+            let bytes = Uint8Array::from(chunk);
+            match on_chunk.call1(&JsValue::UNDEFINED, bytes.as_ref()) {
+                Ok(_) => {
+                    let mut stats = stats.borrow_mut();
+                    stats.bytes_written = stats
+                        .bytes_written
+                        .checked_add(chunk.len())
+                        .ok_or_else(|| io::Error::other("chunk byte count overflow"))?;
+                    stats.chunk_count = stats
+                        .chunk_count
+                        .checked_add(1)
+                        .ok_or_else(|| io::Error::other("chunk count overflow"))?;
+                    Ok(())
+                }
+                Err(error) => {
+                    *callback_error.borrow_mut() = Some(error);
+                    Err(io::Error::other("JavaScript chunk callback failed"))
+                }
+            }
+        }
+    })
+    .map_err(|error| JsError::new(&error.to_string()))?;
+    let finalizer = writer.clone();
+
+    let result = match options.output {
+        OutputFormat::Png => thumbnail_png_to_writer_with_encoder_options_and_buffer(
+            input,
+            &options,
+            &png_options,
+            OUTPUT_CHUNK_BYTES,
+            writer,
+        ),
+        OutputFormat::Jpeg => thumbnail_jpeg_to_writer_with_options_and_buffer(
+            input,
+            &options,
+            &jpeg_options,
+            OUTPUT_CHUNK_BYTES,
+            writer,
+        ),
+        OutputFormat::Rgba => unreachable!("raw RGBA output was rejected above"),
+    };
+    if result.is_ok() {
+        if let Err(error) = finalizer.finish() {
+            if let Some(callback_error) = callback_error.borrow_mut().take() {
+                return Err(callback_error);
+            }
+            return Err(JsError::new(&error.to_string()).into());
+        }
+    }
+    let info = match result {
+        Ok(info) => info,
+        Err(error) => {
+            if let Some(callback_error) = callback_error.borrow_mut().take() {
+                return Err(callback_error);
+            }
+            return Err(JsError::new(&error.to_string()).into());
+        }
+    };
+    let stats = *stats.borrow();
+    Ok(ChunkedThumbnailResult {
+        width: info.width,
+        height: info.height,
+        mime_type: match info.format {
+            OutputFormat::Png => "image/png",
+            OutputFormat::Jpeg => "image/jpeg",
+            OutputFormat::Rgba => unreachable!("chunk output cannot return raw RGBA"),
+        }
+        .to_owned(),
+        format: output_format_name(info.format).to_owned(),
+        bytes_written: stats.bytes_written as f64,
+        chunk_count: stats.chunk_count,
+    })
+}
+
+#[derive(Clone, Copy, Default)]
+struct ChunkStats {
+    bytes_written: usize,
+    chunk_count: u32,
+}
+
+struct ChunkCallbackWriter<F> {
+    state: Rc<RefCell<ChunkCallbackState<F>>>,
+}
+
+struct ChunkCallbackState<F> {
+    buffer: Vec<u8>,
+    callback: F,
+}
+
+impl<F> Clone for ChunkCallbackWriter<F> {
+    fn clone(&self) -> Self {
+        Self {
+            state: Rc::clone(&self.state),
+        }
+    }
+}
+
+impl<F> ChunkCallbackWriter<F>
+where
+    F: FnMut(&[u8]) -> io::Result<()>,
+{
+    fn new(callback: F) -> io::Result<Self> {
+        let mut buffer = Vec::new();
+        buffer
+            .try_reserve_exact(OUTPUT_CHUNK_BYTES)
+            .map_err(|_| io::Error::other("could not allocate the encoded chunk buffer"))?;
+        Ok(Self {
+            state: Rc::new(RefCell::new(ChunkCallbackState { buffer, callback })),
+        })
+    }
+
+    fn finish(&self) -> io::Result<()> {
+        self.state.borrow_mut().emit()
+    }
+}
+
+impl<F> ChunkCallbackState<F>
+where
+    F: FnMut(&[u8]) -> io::Result<()>,
+{
+    fn emit(&mut self) -> io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        (self.callback)(&self.buffer)?;
+        self.buffer.clear();
+        Ok(())
+    }
+}
+
+impl<F> Write for ChunkCallbackWriter<F>
+where
+    F: FnMut(&[u8]) -> io::Result<()>,
+{
+    fn write(&mut self, mut bytes: &[u8]) -> io::Result<usize> {
+        let original_len = bytes.len();
+        let mut state = self.state.borrow_mut();
+        while !bytes.is_empty() {
+            let available = OUTPUT_CHUNK_BYTES - state.buffer.len();
+            let take = available.min(bytes.len());
+            state.buffer.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+            if state.buffer.len() == OUTPUT_CHUNK_BYTES {
+                state.emit()?;
+            }
+        }
+        Ok(original_len)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.finish()
+    }
+}
+
+/// Metadata returned after chunked encoding completes.
+#[wasm_bindgen]
+pub struct ChunkedThumbnailResult {
+    width: u32,
+    height: u32,
+    mime_type: String,
+    format: String,
+    bytes_written: f64,
+    chunk_count: u32,
+}
+
+#[wasm_bindgen]
+impl ChunkedThumbnailResult {
+    #[wasm_bindgen(getter)]
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    #[wasm_bindgen(getter, js_name = mimeType)]
+    pub fn mime_type(&self) -> String {
+        self.mime_type.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn format(&self) -> String {
+        self.format.clone()
+    }
+
+    #[wasm_bindgen(getter, js_name = bytesWritten)]
+    pub fn bytes_written(&self) -> f64 {
+        self.bytes_written
+    }
+
+    #[wasm_bindgen(getter, js_name = chunkCount)]
+    pub fn chunk_count(&self) -> u32 {
+        self.chunk_count
+    }
 }
 
 /// A JavaScript-facing thumbnail result.
@@ -447,10 +683,48 @@ fn optional_u64(object: &JsValue, name: &str) -> Result<Option<u64>, JsError> {
         .transpose()
 }
 
+#[cfg(test)]
+mod chunk_writer_tests {
+    use super::*;
+
+    #[test]
+    fn batches_output_into_bounded_chunks_and_flushes_the_tail() {
+        let chunks = Rc::new(RefCell::new(Vec::new()));
+        let target = Rc::clone(&chunks);
+        let mut writer = ChunkCallbackWriter::new(move |chunk: &[u8]| {
+            target.borrow_mut().push(chunk.to_vec());
+            Ok(())
+        })
+        .unwrap();
+        let bytes = vec![7_u8; OUTPUT_CHUNK_BYTES * 2 + 17];
+
+        writer.write_all(&bytes).unwrap();
+        writer.flush().unwrap();
+
+        let chunks = chunks.borrow();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].len(), OUTPUT_CHUNK_BYTES);
+        assert_eq!(chunks[1].len(), OUTPUT_CHUNK_BYTES);
+        assert_eq!(chunks[2].len(), 17);
+        assert_eq!(chunks.concat(), bytes);
+    }
+
+    #[test]
+    fn stops_after_a_chunk_callback_error() {
+        let mut writer = ChunkCallbackWriter::new(|_: &[u8]| {
+            Err(io::Error::other("injected chunk callback failure"))
+        })
+        .unwrap();
+
+        assert!(writer.write_all(&vec![0; OUTPUT_CHUNK_BYTES]).is_err());
+    }
+}
+
 #[cfg(all(test, target_arch = "wasm32"))]
 mod browser_tests {
     use super::*;
     use js_sys::Object;
+    use wasm_bindgen::{JsCast, closure::Closure};
     use wasm_bindgen_test::*;
 
     wasm_bindgen_test_configure!(run_in_dedicated_worker);
@@ -561,6 +835,49 @@ mod browser_tests {
         assert_eq!(result.format(), "jpeg");
         assert_eq!(&bytes[..2], &[0xff, 0xd8]);
         assert_eq!(&bytes[bytes.len() - 2..], &[0xff, 0xd9]);
+    }
+
+    #[wasm_bindgen_test]
+    fn chunk_callback_matches_buffered_png_and_jpeg_output() {
+        for format in [OutputFormat::Png, OutputFormat::Jpeg] {
+            let options = options_with("output", &JsValue::from_str(output_format_name(format)));
+            let expected_result = thumbnail_png(PNG_INPUT, options.as_ref())
+                .expect("buffered thumbnail must succeed");
+            let expected_width = expected_result.width();
+            let expected_height = expected_result.height();
+            let expected = expected_result.bytes();
+            let chunks = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+            let target = Rc::clone(&chunks);
+            let callback: Closure<dyn FnMut(Uint8Array)> =
+                Closure::new(move |chunk: Uint8Array| {
+                    target.borrow_mut().push(chunk.to_vec());
+                });
+
+            let result = thumbnail_png_to_chunks(
+                PNG_INPUT,
+                callback.as_ref().unchecked_ref(),
+                options.as_ref(),
+            )
+            .expect("chunked thumbnail must succeed");
+            let chunks = chunks.borrow();
+            assert_eq!(chunks.concat(), expected);
+            assert!(chunks.iter().all(|chunk| chunk.len() <= OUTPUT_CHUNK_BYTES));
+            assert_eq!(result.width(), expected_width);
+            assert_eq!(result.height(), expected_height);
+            assert_eq!(result.format(), output_format_name(format));
+            assert_eq!(result.bytes_written(), expected.len() as f64);
+            assert_eq!(result.chunk_count(), chunks.len() as u32);
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn chunk_callback_errors_and_raw_output_are_rejected() {
+        let throwing = Function::new_no_args("throw new Error('injected chunk callback failure')");
+        assert!(thumbnail_png_to_chunks(PNG_INPUT, &throwing, &JsValue::NULL).is_err());
+
+        let rgba = options_with("output", &JsValue::from_str("rgba"));
+        let noop = Function::new_no_args("");
+        assert!(thumbnail_png_to_chunks(PNG_INPUT, &noop, rgba.as_ref()).is_err());
     }
 
     #[wasm_bindgen_test]

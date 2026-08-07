@@ -1,5 +1,5 @@
 import init, {
-  thumbnailPng,
+  thumbnailPngToChunks,
 } from "../../target/npm-package/streamthumb_wasm.js";
 
 self.postMessage({ initializing: true });
@@ -12,14 +12,24 @@ try {
 
 self.addEventListener("message", ({ data }) => {
   try {
-    const result = thumbnailPng(new Uint8Array(data), {
-      maxWidth: 512,
-      maxHeight: 512,
-      output: "png",
-      png: { color: "auto", compression: "balanced", filter: "default" },
-      maxMemoryBytes: 32 * 1024 * 1024,
-    });
-    const bytes = result.bytes;
+    const chunks = [];
+    const result = thumbnailPngToChunks(
+      new Uint8Array(data),
+      (chunk) => chunks.push(chunk),
+      {
+        maxWidth: 512,
+        maxHeight: 512,
+        output: "png",
+        png: { color: "auto", compression: "balanced", filter: "default" },
+        maxMemoryBytes: 32 * 1024 * 1024,
+      },
+    );
+    const bytes = new Uint8Array(result.bytesWritten);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
     const width = result.width;
     const height = result.height;
     const mimeType = result.mimeType;

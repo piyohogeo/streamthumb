@@ -1301,3 +1301,13 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. PNG and JPEG writer output is byte-for-byte equivalent to the existing buffered path for ordered and Adam7 input. External write and flush failures are returned as typed streamthumb encode errors.
 5. The CLI writes through a `BufWriter<File>` instead of first constructing a complete encoded `Vec<u8>`. Existing buffer-returning Rust and WebAssembly APIs remain compatible.
 6. JavaScript chunk callbacks and streams remain a separate later stage. A future WebAssembly API should batch encoded chunks instead of crossing the JavaScript boundary once per image row.
+
+### Phase 30 decisions
+
+1. `thumbnailPngToChunks` accepts the same complete PNG input and options as `thumbnailPng`, but supports only encoded PNG and JPEG output. It returns dimensions, MIME type, format, encoded byte count, and chunk count without owning encoded bytes.
+2. The callback runs synchronously during encoding. Each callback receives an independent JavaScript-owned `Uint8Array` of at most 64 KiB. A thrown callback value aborts processing and is returned to JavaScript unchanged.
+3. The 64 KiB WebAssembly adapter buffer is included in the conservative working-memory plan. JavaScript-retained chunks are caller-owned and remain outside that budget. The existing encoded-byte cap is enforced across all chunks.
+4. This stage does not add asynchronous backpressure, a `ReadableStream`, or incremental input. Consumers must return from callbacks promptly and implement any queue limit outside the library.
+5. The buffered API remains backward compatible. Browser tests compare byte-for-byte PNG and JPEG output across buffered and chunked paths and cover callback failure and raw-output rejection.
+6. CLI output is staged in the destination directory and renamed only after encoding and flushing succeed. On platforms that cannot replace an existing regular file directly, the previous file is temporarily backed up and restored if commit fails.
+7. A 2,048-square high-entropy local run measured 48.31 MiB buffered versus 16.13 MiB chunked WebAssembly high-water for PNG, and 24.00 versus 15.94 MiB for JPEG. The callback discarded chunks immediately; these are single-run architecture measurements rather than release thresholds.

@@ -3,7 +3,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { performance } = require("node:perf_hooks");
 
-function measureOne(packageDirectory, inputPath, maxDimensionText, format, fit) {
+function measureOne(packageDirectory, inputPath, maxDimensionText, format, fit, delivery) {
   const streamthumb = require(path.resolve(packageDirectory));
   const wasmBinaryBytes = fs
     .readdirSync(packageDirectory)
@@ -16,19 +16,22 @@ function measureOne(packageDirectory, inputPath, maxDimensionText, format, fit) 
   const input = fs.readFileSync(inputPath);
   const memoryBefore = streamthumb.wasmMemoryBytes();
   const started = performance.now();
-  const result = streamthumb.thumbnailPng(input, {
+  const options = {
     maxWidth: maxDimension,
     maxHeight: maxDimension,
     fit,
     output: format,
     maxMemoryBytes: 512 * 1024 * 1024,
-  });
+  };
+  const result = delivery === "chunks"
+    ? streamthumb.thumbnailPngToChunks(input, () => {}, options)
+    : streamthumb.thumbnailPng(input, options);
   const runtimeMs = performance.now() - started;
-  const bytes = result.bytes;
+  const outputBytes = delivery === "chunks" ? result.bytesWritten : result.bytes.length;
   const memoryAfter = streamthumb.wasmMemoryBytes();
   const dimensions = path.basename(inputPath).match(/-(\d+)x(\d+)\.png$/);
   const record = {
-    method: `streamthumb-wasm-${fit}-${format}`,
+    method: `streamthumb-wasm-${delivery}-${fit}-${format}`,
     input: inputPath,
     encoded_input_bytes: input.length,
     source_width: dimensions ? Number(dimensions[1]) : null,
@@ -36,7 +39,7 @@ function measureOne(packageDirectory, inputPath, maxDimensionText, format, fit) 
     output_width: result.width,
     output_height: result.height,
     runtime_ms: runtimeMs,
-    output_bytes: bytes.length,
+    output_bytes: outputBytes,
     wasm_memory_before_bytes: memoryBefore,
     wasm_memory_high_water_bytes: memoryAfter,
     wasm_memory_growth_bytes: memoryAfter - memoryBefore,
@@ -55,15 +58,17 @@ function runParent(packageDirectory, corpusDirectory, resultFile, maxDimensionTe
   try {
     for (const file of files) {
       const inputPath = path.join(corpusDirectory, file);
-      for (const [format, fit] of [["png", "contain"], ["jpeg", "contain"], ["png", "cover"], ["jpeg", "cover"]]) {
-        const child = spawnSync(process.execPath, [__filename, packageDirectory, inputPath, maxDimensionText, format, fit], {
-          encoding: "utf8",
-          env: { ...process.env, STREAMTHUMB_BENCHMARK_CHILD: "1" },
-        });
-        if (child.status !== 0) {
-          throw new Error(`WASM ${fit} ${format} benchmark failed for ${inputPath}: ${child.stderr}`);
+      for (const delivery of ["buffered", "chunks"]) {
+        for (const [format, fit] of [["png", "contain"], ["jpeg", "contain"], ["png", "cover"], ["jpeg", "cover"]]) {
+          const child = spawnSync(process.execPath, [__filename, packageDirectory, inputPath, maxDimensionText, format, fit, delivery], {
+            encoding: "utf8",
+            env: { ...process.env, STREAMTHUMB_BENCHMARK_CHILD: "1" },
+          });
+          if (child.status !== 0) {
+            throw new Error(`WASM ${delivery} ${fit} ${format} benchmark failed for ${inputPath}: ${child.stderr}`);
+          }
+          fs.writeSync(output, child.stdout);
         }
-        fs.writeSync(output, child.stdout);
       }
     }
   } finally {
@@ -72,14 +77,17 @@ function runParent(packageDirectory, corpusDirectory, resultFile, maxDimensionTe
 }
 
 if (process.env.STREAMTHUMB_BENCHMARK_CHILD === "1") {
-  const [packageDirectory, inputPath, maxDimensionText = "512", format = "png", fit = "contain"] = process.argv.slice(2);
+  const [packageDirectory, inputPath, maxDimensionText = "512", format = "png", fit = "contain", delivery = "buffered"] = process.argv.slice(2);
   if (format !== "png" && format !== "jpeg") {
     throw new Error("format must be png or jpeg");
   }
   if (fit !== "contain" && fit !== "cover") {
     throw new Error("fit must be contain or cover");
   }
-  measureOne(packageDirectory, inputPath, maxDimensionText, format, fit);
+  if (delivery !== "buffered" && delivery !== "chunks") {
+    throw new Error("delivery must be buffered or chunks");
+  }
+  measureOne(packageDirectory, inputPath, maxDimensionText, format, fit, delivery);
 } else {
   const [packageDirectory, corpusDirectory, resultFile, maxDimensionText = "512"] = process.argv.slice(2);
   if (!packageDirectory || !corpusDirectory || !resultFile) {

@@ -65,12 +65,14 @@ quality equivalence.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\benchmarks\run-wasm.ps1 -Profile smoke
 ```
 
-Each corpus case, fit mode, and output codec runs in a fresh Node.js process and
-a fresh WebAssembly instance. Records identify contain or cover along with PNG
-or JPEG. WebAssembly memory only grows, so the post-operation byte length is
-the linear-memory high-water mark for that case. It includes the allocator's
-retained pages and the copied encoded input, but excludes Node.js heap memory.
-Node RSS is reported separately.
+Each corpus case, fit mode, output codec, and delivery mode runs in a fresh
+Node.js process and a fresh WebAssembly instance. Records identify contain or
+cover, PNG or JPEG, and `buffered` or `chunks` delivery. The chunk callback
+discards each chunk immediately, isolating the linear-memory effect of not
+retaining the encoded result. WebAssembly memory only grows, so the
+post-operation byte length is the linear-memory high-water mark for that case.
+It includes the allocator's retained pages and the copied encoded input, but
+excludes Node.js heap memory. Node RSS is reported separately.
 
 The runner requires `wasm-pack` and Node.js. Its JSON Lines output is written to
 `benchmarks/results/wasm-<profile>.jsonl`.

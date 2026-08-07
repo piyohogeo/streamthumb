@@ -7,14 +7,15 @@ The `@streamthumb/wasm` package exposes a runtime-neutral byte-array API for bou
 Import the default initializer and call it once before using the named exports:
 
 ```js
-import init, { thumbnailPng } from "@streamthumb/wasm";
+import init, { thumbnailPng, thumbnailPngToChunks } from "@streamthumb/wasm";
 
 await init();
 ```
 
 Browsers can let the initializer fetch the adjacent WebAssembly file. Filesystem runtimes should resolve the package module, read `streamthumb_wasm_bg.wasm`, and pass its bytes as `module_or_path`. The [Node.js](../examples/node) and [Deno](../examples/deno) examples show that pattern.
 
-Initialization is asynchronous. `thumbnailPng` is synchronous after initialization.
+Initialization is asynchronous. `thumbnailPng` and `thumbnailPngToChunks` are
+synchronous after initialization.
 
 Advanced consumers may instead call `initSync({ module })` with WebAssembly
 bytes or a precompiled `WebAssembly.Module`. The asynchronous initializer is
@@ -27,9 +28,24 @@ function thumbnailPng(
   input: Uint8Array,
   options?: ThumbnailOptions | null,
 ): ThumbnailResult;
+
+function thumbnailPngToChunks(
+  input: Uint8Array,
+  onChunk: (chunk: Uint8Array) => void,
+  options?: ThumbnailOptions | null,
+): ChunkedThumbnailResult;
 ```
 
 `input` contains one encoded PNG. Passing it into WebAssembly copies the input bytes. An omitted, `undefined`, or `null` options value selects every default below.
+
+`thumbnailPngToChunks` supports encoded PNG and JPEG output. It calls `onChunk`
+synchronously while encoding and does not retain the complete encoded result in
+WebAssembly. Chunks contain at most 64 KiB and each callback receives a new,
+JavaScript-owned `Uint8Array` that remains valid after the callback returns.
+The callback must not assume asynchronous backpressure: it should return
+promptly or copy/queue the chunk under an application-defined limit. A thrown
+callback value aborts processing and is rethrown unchanged. Raw RGBA output is
+rejected by this function; use `thumbnailPng` for RGBA.
 
 ## Options
 
@@ -52,7 +68,7 @@ All numeric options must be non-negative JavaScript safe integers. Operational d
 | `maxOutputWidth` | `8,192` | Maximum planned output width. |
 | `maxOutputHeight` | `8,192` | Maximum planned output height. |
 | `maxOutputPixels` | `16,777,216` | Maximum planned output width multiplied by height. |
-| `maxMemoryBytes` | `33,554,432` (32 MiB) | Maximum conservative working-memory estimate. It covers decoder storage, resize storage, one completed output row for encoded output or the complete frame for raw RGBA, codec state, a bounded JPEG MCU segment where applicable, and bounded encoded output. It excludes caller-owned input, JavaScript memory, WebAssembly runtime overhead, and allocator slack. |
+| `maxMemoryBytes` | `33,554,432` (32 MiB) | Maximum conservative working-memory estimate. It covers decoder storage, resize storage, one completed output row for encoded output or the complete frame for raw RGBA, codec state, a bounded JPEG MCU segment where applicable, and retained encoded output. The chunk API counts its 64 KiB adapter buffer instead of the complete encoded result. It excludes caller-owned input and chunks, JavaScript memory, WebAssembly runtime overhead, and allocator slack. |
 
 The requested bounding box and all applicable resource limits must pass. Setting a limit lower than the requested or calculated operation does not clamp the output; it rejects the operation.
 
@@ -121,6 +137,20 @@ PNG and JPEG outputs are complete encoded images. RGBA output is tightly packed,
 
 Reading `bytes` copies the output from WebAssembly. Read all required properties, then call `result.free()` to release the result's WebAssembly allocation promptly. `ThumbnailResult` also implements `Symbol.dispose` for runtimes that support explicit resource management. The copied `Uint8Array` remains valid after disposal.
 
+`thumbnailPngToChunks` returns a `ChunkedThumbnailResult` after the last callback:
+
+| Property | Type | Contract |
+| --- | --- | --- |
+| `width` | `number` | Output width in pixels. |
+| `height` | `number` | Output height in pixels. |
+| `mimeType` | `string` | `image/png` or `image/jpeg`. |
+| `format` | `string` | `png` or `jpeg`. |
+| `bytesWritten` | `number` | Total encoded bytes delivered to callbacks. |
+| `chunkCount` | `number` | Number of successful callback invocations. |
+
+Call `result.free()` after reading the metadata. The API does not expose a
+`ReadableStream`, asynchronous callback, or incremental-input contract.
+
 ## Utility exports
 
 ```ts
@@ -150,12 +180,16 @@ The encoded byte limit is checked before parsing. Declared dimensions, pixels, o
 
 ## Errors and resource limits
 
-The initializer rejects its promise when WebAssembly loading or compilation fails. After successful initialization, `thumbnailPng` throws a JavaScript `Error` synchronously for:
+The initializer rejects its promise when WebAssembly loading or compilation fails. After successful initialization, both thumbnail functions throw synchronously for:
 
 - invalid option types, unsupported option values, zero operational dimensions, or out-of-range numbers;
 - malformed, unsupported, truncated, or animated PNG input;
 - input, output, or working-memory limit violations;
 - checked arithmetic overflow, allocation failure, or internal consistency failure.
+
+`thumbnailPngToChunks` additionally rejects raw RGBA output. A callback may
+throw any JavaScript value; that value is propagated without replacing it with
+a streamthumb error.
 
 The API currently has no stable machine-readable error codes. Callers should catch `Error` and treat its message as diagnostic text, not as a version-stable identifier.
 

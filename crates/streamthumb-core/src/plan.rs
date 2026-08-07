@@ -36,7 +36,7 @@ pub struct ProcessingPlan {
 
 /// Validates limits and creates a processing plan before decoding begins.
 pub fn plan_thumbnail(input: InputInfo, options: &ThumbnailOptions) -> Result<ProcessingPlan> {
-    plan_thumbnail_with_layout(input, options, false, true)
+    plan_thumbnail_with_layout(input, options, false, EncodedOutputStorage::Buffered)
 }
 
 /// Creates a processing plan for arbitrary-order sparse source samples.
@@ -44,7 +44,7 @@ pub fn plan_thumbnail_sparse(
     input: InputInfo,
     options: &ThumbnailOptions,
 ) -> Result<ProcessingPlan> {
-    plan_thumbnail_with_layout(input, options, true, true)
+    plan_thumbnail_with_layout(input, options, true, EncodedOutputStorage::Buffered)
 }
 
 /// Creates a plan whose encoded result is forwarded to a caller-owned writer.
@@ -52,7 +52,7 @@ pub fn plan_thumbnail_to_writer(
     input: InputInfo,
     options: &ThumbnailOptions,
 ) -> Result<ProcessingPlan> {
-    plan_thumbnail_with_layout(input, options, false, false)
+    plan_thumbnail_to_writer_with_buffer(input, options, 0)
 }
 
 /// Creates a sparse-input plan whose encoded result is forwarded to a writer.
@@ -60,14 +60,50 @@ pub fn plan_thumbnail_sparse_to_writer(
     input: InputInfo,
     options: &ThumbnailOptions,
 ) -> Result<ProcessingPlan> {
-    plan_thumbnail_with_layout(input, options, true, false)
+    plan_thumbnail_sparse_to_writer_with_buffer(input, options, 0)
+}
+
+/// Creates a direct-writer plan that retains a bounded adapter buffer.
+#[doc(hidden)]
+pub fn plan_thumbnail_to_writer_with_buffer(
+    input: InputInfo,
+    options: &ThumbnailOptions,
+    writer_buffer_bytes: usize,
+) -> Result<ProcessingPlan> {
+    plan_thumbnail_with_layout(
+        input,
+        options,
+        false,
+        EncodedOutputStorage::Writer(writer_buffer_bytes),
+    )
+}
+
+/// Creates a sparse direct-writer plan that retains an adapter buffer.
+#[doc(hidden)]
+pub fn plan_thumbnail_sparse_to_writer_with_buffer(
+    input: InputInfo,
+    options: &ThumbnailOptions,
+    writer_buffer_bytes: usize,
+) -> Result<ProcessingPlan> {
+    plan_thumbnail_with_layout(
+        input,
+        options,
+        true,
+        EncodedOutputStorage::Writer(writer_buffer_bytes),
+    )
+}
+
+#[derive(Clone, Copy)]
+enum EncodedOutputStorage {
+    Buffered,
+    Writer(usize),
 }
 
 fn plan_thumbnail_with_layout(
     input: InputInfo,
     options: &ThumbnailOptions,
     sparse: bool,
-    retain_encoded_output: bool,
+    encoded_output_storage: EncodedOutputStorage,
 ) -> Result<ProcessingPlan> {
     validate_non_zero_limits(options)?;
     validate_input(input, options)?;
@@ -81,32 +117,44 @@ fn plan_thumbnail_with_layout(
     };
     validate_output(output, options)?;
 
-    let memory = match (sparse, retain_encoded_output) {
-        (true, true) => estimate_sparse_working_memory_for_output(
+    let mut memory = match (sparse, encoded_output_storage) {
+        (true, EncodedOutputStorage::Buffered) => estimate_sparse_working_memory_for_output(
             input.dimensions,
             output,
             input.source_bytes_per_pixel,
             options.output,
         )?,
-        (false, true) => estimate_working_memory_for_output(
+        (false, EncodedOutputStorage::Buffered) => estimate_working_memory_for_output(
             input.dimensions,
             output,
             input.source_bytes_per_pixel,
             options.output,
         )?,
-        (true, false) => estimate_sparse_writer_working_memory_for_output(
-            input.dimensions,
-            output,
-            input.source_bytes_per_pixel,
-            options.output,
-        )?,
-        (false, false) => estimate_writer_working_memory_for_output(
+        (true, EncodedOutputStorage::Writer(_)) => {
+            estimate_sparse_writer_working_memory_for_output(
+                input.dimensions,
+                output,
+                input.source_bytes_per_pixel,
+                options.output,
+            )?
+        }
+        (false, EncodedOutputStorage::Writer(_)) => estimate_writer_working_memory_for_output(
             input.dimensions,
             output,
             input.source_bytes_per_pixel,
             options.output,
         )?,
     };
+    if let EncodedOutputStorage::Writer(writer_buffer_bytes) = encoded_output_storage {
+        memory.encoded_output_bytes = writer_buffer_bytes;
+        memory.total_bytes =
+            memory
+                .total_bytes
+                .checked_add(writer_buffer_bytes)
+                .ok_or(Error::IntegerOverflow {
+                    operation: "writer output buffer memory",
+                })?;
+    }
     let encoded_output_limit_bytes = estimate_encoded_output_limit_bytes(output, options.output)?;
     enforce(
         LimitKind::WorkingMemory,
@@ -416,6 +464,28 @@ mod tests {
         assert_limit(
             plan_thumbnail(input(512, 512), &options).unwrap_err(),
             LimitKind::WorkingMemory,
+        );
+    }
+
+    #[test]
+    fn writer_adapter_buffer_is_included_in_working_memory() {
+        let options = ThumbnailOptions {
+            output: crate::OutputFormat::Png,
+            ..ThumbnailOptions::default()
+        };
+        let unbuffered = plan_thumbnail_to_writer(input(512, 512), &options).unwrap();
+        let buffered =
+            plan_thumbnail_to_writer_with_buffer(input(512, 512), &options, 64 * 1024).unwrap();
+
+        assert_eq!(unbuffered.memory.encoded_output_bytes, 0);
+        assert_eq!(buffered.memory.encoded_output_bytes, 64 * 1024);
+        assert_eq!(
+            buffered.memory.total_bytes,
+            unbuffered.memory.total_bytes + 64 * 1024
+        );
+        assert_eq!(
+            buffered.encoded_output_limit_bytes,
+            unbuffered.encoded_output_limit_bytes
         );
     }
 }

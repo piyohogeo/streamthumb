@@ -42,6 +42,8 @@ for (const publicExport of [
   "`Symbol.dispose`",
   "function streamthumbVersion(): string;",
   "function wasmMemoryBytes(): number;",
+  "function thumbnailPngToChunks(",
+  "Chunks contain at most 64 KiB",
   "does not\nconvert sRGB values to linear light",
 ]) {
   requireText(api, publicExport, "docs/WASM_API.md");
@@ -122,5 +124,6 @@ requireText(
   'from "../../target/npm-package/streamthumb_wasm.js"',
   "examples/browser/worker.js",
 );
+requireText(browserWorker, "thumbnailPngToChunks", "examples/browser/worker.js");
 
 console.log("PASS: public WebAssembly API documentation and examples are aligned");

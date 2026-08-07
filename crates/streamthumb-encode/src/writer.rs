@@ -14,7 +14,7 @@ pub trait OutputTarget: Write {
     type Finished;
 
     fn prepare_write(&mut self, additional: usize, required: usize) -> Result<()>;
-    fn finish(self) -> Self::Finished;
+    fn finish(self) -> io::Result<Self::Finished>;
 }
 
 /// A fallibly growing in-memory output target.
@@ -63,8 +63,8 @@ impl OutputTarget for BufferedOutput {
             .map_err(|_| Error::AllocationFailed { bytes: required })
     }
 
-    fn finish(self) -> Self::Finished {
-        self.bytes
+    fn finish(self) -> io::Result<Self::Finished> {
+        Ok(self.bytes)
     }
 }
 
@@ -97,7 +97,9 @@ impl<W: Write> OutputTarget for ExternalOutput<W> {
         Ok(())
     }
 
-    fn finish(self) -> Self::Finished {}
+    fn finish(mut self) -> io::Result<Self::Finished> {
+        self.writer.flush()
+    }
 }
 
 /// An encoded-output writer with a strict byte cap.
@@ -165,13 +167,16 @@ impl<T: OutputTarget> BoundedWriter<T> {
 
     pub fn into_output(self) -> Result<T::Finished> {
         let format = self.state.borrow().format;
-        Rc::try_unwrap(self.state)
+        let state = Rc::try_unwrap(self.state)
             .map_err(|_| Error::EncodeFailure {
                 format,
                 message: "encoded output writer is still shared".to_owned(),
             })
-            .map(RefCell::into_inner)
-            .map(|state| state.target.finish())
+            .map(RefCell::into_inner)?;
+        state.target.finish().map_err(|error| Error::EncodeFailure {
+            format,
+            message: error.to_string(),
+        })
     }
 
     fn map_failure(&self) -> Option<Error> {
@@ -241,6 +246,18 @@ impl<T: OutputTarget> Write for BoundedWriter<T> {
 mod tests {
     use super::*;
 
+    struct FlushFailure;
+
+    impl Write for FlushFailure {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("injected flush failure"))
+        }
+    }
+
     #[test]
     fn refuses_to_grow_past_the_cap() {
         let mut writer = BoundedWriter::buffered(3, OutputFormat::Jpeg).unwrap();
@@ -264,5 +281,18 @@ mod tests {
             writer.into_output().unwrap();
         }
         assert_eq!(output, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn reports_external_flush_failures_when_output_finishes() {
+        let writer = BoundedWriter::external(FlushFailure, 4, OutputFormat::Png).unwrap();
+
+        assert!(matches!(
+            writer.into_output(),
+            Err(Error::EncodeFailure {
+                format: OutputFormat::Png,
+                message,
+            }) if message == "injected flush failure"
+        ));
     }
 }

@@ -4,7 +4,7 @@ use png::{BitDepth, ColorType};
 use streamthumb_core::{
     AreaDownsampler, Dimensions, InputInfo, OutputFormat, ProcessingPlan, RgbaImage,
     SparseAreaDownsampler, ThumbnailInfo, ThumbnailOptions, plan_thumbnail, plan_thumbnail_sparse,
-    plan_thumbnail_sparse_to_writer, plan_thumbnail_to_writer,
+    plan_thumbnail_sparse_to_writer_with_buffer, plan_thumbnail_to_writer_with_buffer,
 };
 use streamthumb_encode::{JpegOptions, JpegRowSink, JpegWriterRowSink};
 
@@ -16,7 +16,7 @@ use crate::{
 #[derive(Clone, Copy)]
 enum EncodedOutputStorage {
     Buffered,
-    Writer,
+    Writer(usize),
 }
 
 /// A normalized 8-bit RGBA source row.
@@ -99,7 +99,9 @@ where
     };
     let plan = match storage {
         EncodedOutputStorage::Buffered => plan_thumbnail(input_info, options),
-        EncodedOutputStorage::Writer => plan_thumbnail_to_writer(input_info, options),
+        EncodedOutputStorage::Writer(buffer_bytes) => {
+            plan_thumbnail_to_writer_with_buffer(input_info, options, buffer_bytes)
+        }
     }?;
     decoder.set_limits(png::Limits {
         bytes: plan
@@ -258,10 +260,23 @@ pub fn thumbnail_png_to_writer_with_encoder_options<W: Write + 'static>(
     png_options: &PngOptions,
     writer: W,
 ) -> Result<ThumbnailInfo> {
+    thumbnail_png_to_writer_with_encoder_options_and_buffer(input, options, png_options, 0, writer)
+}
+
+/// Writes PNG output through an adapter that retains a bounded chunk buffer.
+#[doc(hidden)]
+pub fn thumbnail_png_to_writer_with_encoder_options_and_buffer<W: Write + 'static>(
+    input: &[u8],
+    options: &ThumbnailOptions,
+    png_options: &PngOptions,
+    writer_buffer_bytes: usize,
+    writer: W,
+) -> Result<ThumbnailInfo> {
     if options.output != OutputFormat::Png {
         return Err(Error::InvalidPngOptions("PNG settings require PNG output"));
     }
-    let plan = thumbnail_png_encoded_to_writer(input, options, *png_options, writer)?;
+    let plan =
+        thumbnail_png_encoded_to_writer(input, options, *png_options, writer_buffer_bytes, writer)?;
     Ok(ThumbnailInfo {
         width: plan.output.width,
         height: plan.output.height,
@@ -288,12 +303,30 @@ pub fn thumbnail_jpeg_to_writer_with_options<W: Write>(
     jpeg_options: &JpegOptions,
     writer: W,
 ) -> Result<ThumbnailInfo> {
+    thumbnail_jpeg_to_writer_with_options_and_buffer(input, options, jpeg_options, 0, writer)
+}
+
+/// Writes JPEG output through an adapter that retains a bounded chunk buffer.
+#[doc(hidden)]
+pub fn thumbnail_jpeg_to_writer_with_options_and_buffer<W: Write>(
+    input: &[u8],
+    options: &ThumbnailOptions,
+    jpeg_options: &JpegOptions,
+    writer_buffer_bytes: usize,
+    writer: W,
+) -> Result<ThumbnailInfo> {
     if options.output != OutputFormat::Jpeg {
         return Err(Error::InvalidJpegOptions(
             "JPEG settings require JPEG output",
         ));
     }
-    let plan = thumbnail_jpeg_encoded_to_writer(input, options, *jpeg_options, writer)?;
+    let plan = thumbnail_jpeg_encoded_to_writer(
+        input,
+        options,
+        *jpeg_options,
+        writer_buffer_bytes,
+        writer,
+    )?;
     Ok(ThumbnailInfo {
         width: plan.output.width,
         height: plan.output.height,
@@ -305,6 +338,7 @@ fn thumbnail_jpeg_encoded_to_writer<W: Write>(
     input: &[u8],
     options: &ThumbnailOptions,
     jpeg_options: JpegOptions,
+    writer_buffer_bytes: usize,
     writer: W,
 ) -> Result<ProcessingPlan> {
     let inspection = inspect_png(input, options)?;
@@ -312,7 +346,7 @@ fn thumbnail_jpeg_encoded_to_writer<W: Write>(
         let (downsampler, plan) = thumbnail_png_adam7_downsampler_with_storage(
             input,
             options,
-            EncodedOutputStorage::Writer,
+            EncodedOutputStorage::Writer(writer_buffer_bytes),
         )?;
         let sink = JpegWriterRowSink::new(
             plan.output,
@@ -326,8 +360,11 @@ fn thumbnail_jpeg_encoded_to_writer<W: Write>(
 
     let mut downsampler = None;
     let mut writer = Some(writer);
-    let decoded =
-        decode_png_rows_with_storage(input, options, EncodedOutputStorage::Writer, |row| {
+    let decoded = decode_png_rows_with_storage(
+        input,
+        options,
+        EncodedOutputStorage::Writer(writer_buffer_bytes),
+        |row| {
             if downsampler.is_none() {
                 let target = writer.take().ok_or_else(|| {
                     Error::DecodeFailure("failed to acquire the JPEG output writer".to_owned())
@@ -352,7 +389,8 @@ fn thumbnail_jpeg_encoded_to_writer<W: Write>(
                 })?
                 .push_row(row.y, row.pixels)?;
             Ok(())
-        })?;
+        },
+    )?;
     downsampler.ok_or(Error::TruncatedInput)?.finish()?;
     Ok(decoded.plan)
 }
@@ -361,6 +399,7 @@ fn thumbnail_png_encoded_to_writer<W: Write + 'static>(
     input: &[u8],
     options: &ThumbnailOptions,
     png_options: PngOptions,
+    writer_buffer_bytes: usize,
     writer: W,
 ) -> Result<ProcessingPlan> {
     let inspection = inspect_png(input, options)?;
@@ -369,7 +408,7 @@ fn thumbnail_png_encoded_to_writer<W: Write + 'static>(
         let (downsampler, plan) = thumbnail_png_adam7_downsampler_with_storage(
             input,
             options,
-            EncodedOutputStorage::Writer,
+            EncodedOutputStorage::Writer(writer_buffer_bytes),
         )?;
         let sink = PngWriterRowSink::with_writer(
             plan.output,
@@ -384,8 +423,11 @@ fn thumbnail_png_encoded_to_writer<W: Write + 'static>(
 
     let mut downsampler = None;
     let mut writer = Some(writer);
-    let decoded =
-        decode_png_rows_with_storage(input, options, EncodedOutputStorage::Writer, |row| {
+    let decoded = decode_png_rows_with_storage(
+        input,
+        options,
+        EncodedOutputStorage::Writer(writer_buffer_bytes),
+        |row| {
             if downsampler.is_none() {
                 let target = writer.take().ok_or_else(|| {
                     Error::DecodeFailure("failed to acquire the PNG output writer".to_owned())
@@ -411,7 +453,8 @@ fn thumbnail_png_encoded_to_writer<W: Write + 'static>(
                 })?
                 .push_row(row.y, row.pixels)?;
             Ok(())
-        })?;
+        },
+    )?;
     downsampler.ok_or(Error::TruncatedInput)?.finish()?;
     Ok(decoded.plan)
 }
@@ -690,7 +733,9 @@ fn thumbnail_png_adam7_downsampler_with_storage(
     };
     let plan = match storage {
         EncodedOutputStorage::Buffered => plan_thumbnail_sparse(input_info, options),
-        EncodedOutputStorage::Writer => plan_thumbnail_sparse_to_writer(input_info, options),
+        EncodedOutputStorage::Writer(buffer_bytes) => {
+            plan_thumbnail_sparse_to_writer_with_buffer(input_info, options, buffer_bytes)
+        }
     }?;
     decoder.set_limits(png::Limits {
         bytes: plan
@@ -2791,13 +2836,14 @@ mod tests {
             output: OutputFormat::Png,
             ..default_options()
         };
-        let writer_plan = plan_thumbnail_to_writer(
+        let writer_plan = plan_thumbnail_to_writer_with_buffer(
             InputInfo {
                 dimensions: Dimensions::new(width, height).unwrap(),
                 encoded_bytes: u64::try_from(input.len()).unwrap(),
                 source_bytes_per_pixel: 4,
             },
             &options,
+            0,
         )
         .unwrap();
         options.limits.max_working_memory_bytes = writer_plan.memory.total_bytes;

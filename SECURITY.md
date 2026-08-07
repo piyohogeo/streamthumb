@@ -6,7 +6,7 @@
 
 The current implementation checks encoded input bytes before parsing and checks dimensions, source pixels, output dimensions, output pixels, and estimated working memory after IHDR and before IDAT decoding. The PNG decoder also receives its own allocation allowance. Encoded PNG and JPEG output is written through a bounded writer.
 
-The working-memory budget covers decoder rows and staging, normalized source-row storage, one reusable completed output row, ordered-row or Adam7 sparse area accumulators, output RGBA storage where retained by the raw-output collector, codec state (including PNG conversion rows or a JPEG MCU row and temporary segment), and bounded encoded output where retained by the return type. Buffer-returning PNG and JPEG APIs retain the complete bounded encoded result. Direct Rust writer APIs enforce the same encoded byte cap without counting caller-owned destination storage as streamthumb working memory. It does not include:
+The working-memory budget covers decoder rows and staging, normalized source-row storage, one reusable completed output row, ordered-row or Adam7 sparse area accumulators, output RGBA storage where retained by the raw-output collector, codec state (including PNG conversion rows or a JPEG MCU row and temporary segment), and bounded encoded output where retained by the return type. Buffer-returning PNG and JPEG APIs retain the complete bounded encoded result. Direct Rust writer APIs enforce the same encoded byte cap without counting caller-owned destination storage as streamthumb working memory. The WebAssembly chunk API counts its 64 KiB adapter buffer but not JavaScript-owned chunk copies. It does not include:
 
 - the caller-owned encoded input buffer;
 - storage owned by a direct output writer;

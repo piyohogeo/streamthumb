@@ -36,7 +36,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo package --workspace
+      # Unpublished path dependencies cannot be verified from crates.io yet.
+      # Workspace compilation is covered by the native job; this job audits archives.
+      - run: cargo package --workspace --no-verify
 
   npm-package:
     runs-on: ubuntu-latest
