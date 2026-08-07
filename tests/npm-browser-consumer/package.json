@@ -1,5 +1,9 @@
 {
   "name": "streamthumb-npm-browser-consumer",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "typescript": "7.0.2"
+  }
 }

@@ -7,6 +7,42 @@ use streamthumb_png::{ThumbnailOutput, thumbnail_png as create_thumbnail};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
+#[wasm_bindgen(typescript_custom_section)]
+const THUMBNAIL_TYPES: &str = r#"
+/** Fit modes supported by the bounded thumbnail pipeline. */
+export type ThumbnailFit = "contain";
+
+/** Resize filters supported by the bounded thumbnail pipeline. */
+export type ThumbnailFilter = "area";
+
+/** Output representations supported by the WebAssembly API. */
+export type ThumbnailOutputFormat = "png" | "rgba";
+
+/** Options and resource limits for thumbnail generation. */
+export interface ThumbnailOptions {
+    maxWidth?: number;
+    maxHeight?: number;
+    fit?: ThumbnailFit;
+    filter?: ThumbnailFilter;
+    allowUpscale?: boolean;
+    output?: ThumbnailOutputFormat;
+    maxInputBytes?: number;
+    maxInputWidth?: number;
+    maxInputHeight?: number;
+    maxInputPixels?: number;
+    maxOutputWidth?: number;
+    maxOutputHeight?: number;
+    maxOutputPixels?: number;
+    maxMemoryBytes?: number;
+}
+
+/** Creates a bounded PNG or RGBA thumbnail from encoded PNG bytes. */
+export function thumbnailPng(
+    input: Uint8Array,
+    options?: ThumbnailOptions | null,
+): ThumbnailResult;
+"#;
+
 /// Returns the package version for bootstrap and packaging checks.
 #[wasm_bindgen(js_name = streamthumbVersion)]
 pub fn streamthumb_version() -> String {
@@ -26,7 +62,7 @@ pub fn wasm_memory_bytes() -> u32 {
 }
 
 /// Creates a bounded PNG or RGBA thumbnail from encoded PNG bytes.
-#[wasm_bindgen(js_name = thumbnailPng)]
+#[wasm_bindgen(js_name = thumbnailPng, skip_typescript)]
 pub fn thumbnail_png(input: &[u8], options: &JsValue) -> Result<ThumbnailResult, JsError> {
     let options = parse_options(options)?;
     let output =

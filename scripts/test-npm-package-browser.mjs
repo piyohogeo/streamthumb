@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { cp, mkdir, readFile, rm } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tarball = path.resolve(root, process.argv[2] ?? "");
@@ -26,7 +26,43 @@ await cp(path.join(root, "tests", "npm-browser-consumer"), consumer, {
   recursive: true,
 });
 
-const npmArguments = [
+function runNpm(arguments_) {
+  let command = "npm";
+  let commandArguments = arguments_;
+  if (process.platform === "win32") {
+    command = process.execPath;
+    commandArguments = [
+      path.join(
+        path.dirname(process.execPath),
+        "node_modules",
+        "npm",
+        "bin",
+        "npm-cli.js",
+      ),
+      ...arguments_,
+    ];
+  }
+
+  const result = spawnSync(command, commandArguments, {
+    cwd: consumer,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      npm_config_cache: path.join(target, "npm-cache"),
+    },
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    process.stderr.write(result.stdout);
+    process.stderr.write(result.stderr);
+    throw new Error(`npm ${arguments_[0]} exited with status ${result.status}`);
+  }
+}
+
+runNpm(["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
+runNpm([
   "install",
   "--ignore-scripts",
   "--no-audit",
@@ -34,39 +70,36 @@ const npmArguments = [
   "--no-package-lock",
   "--no-save",
   tarball,
-];
-let npmCommand = "npm";
-let commandArguments = npmArguments;
-if (process.platform === "win32") {
-  npmCommand = process.execPath;
-  commandArguments = [
-    path.join(
-      path.dirname(process.execPath),
-      "node_modules",
-      "npm",
-      "bin",
-      "npm-cli.js",
-    ),
-    ...npmArguments,
-  ];
+]);
+
+const typeCheck = spawnSync(
+  process.execPath,
+  [path.join(consumer, "node_modules", "typescript", "bin", "tsc")],
+  { cwd: consumer, encoding: "utf8" },
+);
+if (typeCheck.error) {
+  throw typeCheck.error;
+}
+if (typeCheck.status !== 0) {
+  process.stderr.write(typeCheck.stdout);
+  process.stderr.write(typeCheck.stderr);
+  throw new Error(`TypeScript exited with status ${typeCheck.status}`);
 }
 
-const install = spawnSync(npmCommand, commandArguments, {
-  cwd: consumer,
-  encoding: "utf8",
-  env: {
-    ...process.env,
-    npm_config_cache: path.join(target, "npm-cache"),
-  },
+const esbuild = await import(
+  pathToFileURL(
+    path.join(consumer, "node_modules", "esbuild", "lib", "main.js"),
+  ).href
+);
+await esbuild.build({
+  entryPoints: [path.join(consumer, "smoke.ts")],
+  bundle: true,
+  format: "esm",
+  logLevel: "warning",
+  outfile: path.join(consumer, "bundle.js"),
+  platform: "browser",
+  target: "es2022",
 });
-if (install.error) {
-  throw install.error;
-}
-if (install.status !== 0) {
-  process.stderr.write(install.stdout);
-  process.stderr.write(install.stderr);
-  throw new Error(`npm install exited with status ${install.status}`);
-}
 
 const packageRoot = path.join(
   consumer,
@@ -77,8 +110,8 @@ const packageRoot = path.join(
 const routes = new Map([
   ["/", [path.join(consumer, "smoke.html"), "text/html; charset=utf-8"]],
   [
-    "/smoke.mjs",
-    [path.join(consumer, "smoke.mjs"), "text/javascript; charset=utf-8"],
+    "/bundle.js",
+    [path.join(consumer, "bundle.js"), "text/javascript; charset=utf-8"],
   ],
   [
     "/fixture.png",
@@ -94,11 +127,7 @@ const routes = new Map([
     ],
   ],
   [
-    "/node_modules/@streamthumb/wasm/streamthumb_wasm.js",
-    [path.join(packageRoot, "streamthumb_wasm.js"), "text/javascript; charset=utf-8"],
-  ],
-  [
-    "/node_modules/@streamthumb/wasm/streamthumb_wasm_bg.wasm",
+    "/streamthumb_wasm_bg.wasm",
     [path.join(packageRoot, "streamthumb_wasm_bg.wasm"), "application/wasm"],
   ],
 ]);

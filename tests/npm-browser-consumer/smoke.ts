@@ -1,11 +1,17 @@
 import init, {
   streamthumbVersion,
   thumbnailPng,
+  type ThumbnailOptions,
+  type ThumbnailOutputFormat,
 } from "@streamthumb/wasm";
 
-const status = document.querySelector("#status");
+const statusElement = document.querySelector<HTMLPreElement>("#status");
+if (!statusElement) {
+  throw new Error("The smoke-test status element is missing.");
+}
+const status: HTMLPreElement = statusElement;
 
-async function finish(result, message) {
+async function finish(result: "pass" | "fail", message: string) {
   document.documentElement.dataset.result = result;
   status.textContent = message;
   await fetch("/result", {
@@ -15,10 +21,29 @@ async function finish(result, message) {
   });
 }
 
-function hasPngSignature(bytes) {
+function hasPngSignature(bytes: Uint8Array) {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10];
   return signature.every((value, index) => bytes[index] === value);
 }
+
+const output: ThumbnailOutputFormat = "png";
+const options: ThumbnailOptions = {
+  maxWidth: 32,
+  maxHeight: 32,
+  fit: "contain",
+  filter: "area",
+  allowUpscale: false,
+  output,
+  maxMemoryBytes: 32 * 1024 * 1024,
+};
+
+// These assertions fail compilation if the public literal types become broad.
+// @ts-expect-error JPEG output is not supported.
+const invalidOutput: ThumbnailOptions = { output: "jpeg" };
+// @ts-expect-error Width must be numeric.
+const invalidWidth: ThumbnailOptions = { maxWidth: "32" };
+void invalidOutput;
+void invalidWidth;
 
 try {
   await init();
@@ -27,12 +52,10 @@ try {
     throw new Error(`fixture request failed with HTTP ${response.status}`);
   }
 
-  const result = thumbnailPng(new Uint8Array(await response.arrayBuffer()), {
-    maxWidth: 32,
-    maxHeight: 32,
-    output: "png",
-    maxMemoryBytes: 32 * 1024 * 1024,
-  });
+  const result = thumbnailPng(
+    new Uint8Array(await response.arrayBuffer()),
+    options,
+  );
   const bytes = result.bytes;
 
   if (result.width !== 32 || result.height !== 32) {
@@ -42,7 +65,10 @@ try {
     throw new Error("thumbnail output is not a PNG");
   }
 
-  const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  const pngBuffer = new Uint8Array(bytes).buffer;
+  const bitmap = await createImageBitmap(
+    new Blob([pngBuffer], { type: "image/png" }),
+  );
   const decodedDimensions = `${bitmap.width}x${bitmap.height}`;
   bitmap.close();
   if (decodedDimensions !== "32x32") {

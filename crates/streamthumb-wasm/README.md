@@ -43,4 +43,8 @@ const bytes = result.bytes;
 
 `output: "png"` returns encoded PNG bytes with MIME type `image/png`. `output: "rgba"` returns tightly packed, straight-alpha RGBA8 pixels with MIME type `application/octet-stream`.
 
+The package exports `ThumbnailOptions`, `ThumbnailFit`, `ThumbnailFilter`, and
+`ThumbnailOutputFormat` TypeScript types. Every option is optional, and
+`thumbnailPng` also accepts an omitted or `null` options value.
+
 The API has no dependency on DOM, Canvas, filesystem, threads, `SharedArrayBuffer`, or Node-specific APIs. Passing and returning byte arrays currently copies them across the JavaScript/WebAssembly boundary.

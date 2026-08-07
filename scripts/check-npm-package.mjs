@@ -11,6 +11,10 @@ const packageDirectory = path.resolve(
 const manifest = JSON.parse(
   await readFile(path.join(packageDirectory, "package.json"), "utf8"),
 );
+const declarations = await readFile(
+  path.join(packageDirectory, "streamthumb_wasm.d.ts"),
+  "utf8",
+);
 
 const expectedManifest = {
   name: "@streamthumb/wasm",
@@ -49,6 +53,22 @@ for (const [key, value] of Object.entries(expectedStructuredMetadata)) {
 }
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version)) {
   throw new Error(`package.json version is not a supported semantic version: ${manifest.version}`);
+}
+
+const declarationContract = [
+  "export interface ThumbnailOptions",
+  'export type ThumbnailFit = "contain";',
+  'export type ThumbnailFilter = "area";',
+  'export type ThumbnailOutputFormat = "png" | "rgba";',
+  "options?: ThumbnailOptions | null,",
+];
+for (const expected of declarationContract) {
+  if (!declarations.includes(expected)) {
+    throw new Error(`TypeScript declarations are missing: ${expected}`);
+  }
+}
+if ((declarations.match(/export function thumbnailPng\(/g) ?? []).length !== 1) {
+  throw new Error("TypeScript declarations must export exactly one thumbnailPng signature.");
 }
 
 const npmCommand = process.platform === "win32"

@@ -14,3 +14,5 @@ project follows Semantic Versioning.
 - Native, browser, and comparative memory benchmark tooling.
 - An npm tarball consumer test covering package installation, browser import,
   automatic WebAssembly loading, thumbnail generation, and PNG decoding.
+- Strict TypeScript declarations for thumbnail options and literal values,
+  validated through a pinned TypeScript and esbuild consumer build.

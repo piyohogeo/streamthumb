@@ -1193,7 +1193,15 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 ### Phase 17 decisions
 
 1. Package CI installs the generated tarball into a fresh private consumer project instead of importing the build directory directly.
-2. The consumer uses the public `@streamthumb/wasm` specifier through a browser import map and relies on the package's default WebAssembly URL resolution.
+2. The consumer starts from the public `@streamthumb/wasm` specifier and relies on the package's default WebAssembly URL resolution.
 3. Headless Chrome verifies package import, WebAssembly initialization, the exported version, thumbnail generation, PNG signature, and browser decoding of the output dimensions.
 4. The smoke-test server exposes an exact route allowlist and binds only to loopback. Generated consumer files and the isolated Chrome profile remain under the ignored `target` directory.
 5. Artifact upload occurs only after the installed-package browser smoke test passes. npm publication and Cloudflare runtime validation remain outside this phase.
+
+### Phase 18 decisions
+
+1. The WebAssembly package exports strict `ThumbnailOptions`, `ThumbnailFit`, `ThumbnailFilter`, and `ThumbnailOutputFormat` declarations through wasm-bindgen's custom TypeScript section.
+2. The JavaScript runtime continues to accept omitted, undefined, or null options. The public TypeScript signature models this behavior with an optional `ThumbnailOptions | null` parameter.
+3. The package checker requires the public option declarations and exactly one typed `thumbnailPng` signature in every generated package.
+4. The tarball consumer pins TypeScript 7.0.2 and esbuild 0.28.1 in a dedicated lockfile. These tools remain test-only dependencies outside the published package.
+5. CI runs strict type checking, including negative literal and property tests, bundles the TypeScript entry point as an ES module, and executes the resulting bundle in Chrome.

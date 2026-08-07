@@ -30,8 +30,9 @@ The exported `thumbnailPng(inputBytes, options)` function works without DOM, Can
 
 The generated package is prepared as `@streamthumb/wasm` in
 `target/npm-package`. Normal CI validates its metadata and exact tarball
-contents, installs it into an empty consumer project, exercises it in Chrome,
-and then stores the unpublished tarball as the `npm-package` artifact.
+contents, installs it into an empty consumer project, checks its TypeScript
+declarations, bundles it with pinned esbuild, exercises it in Chrome, and then
+stores the unpublished tarball as the `npm-package` artifact.
 See [docs/RELEASING.md](docs/RELEASING.md) for the manual release process.
 
 ## Positioning
