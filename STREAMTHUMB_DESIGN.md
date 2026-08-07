@@ -1340,3 +1340,9 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. Options and every non-memory resource limit remain enforcing during planning. A working-memory shortfall is the only limit represented as data; execution with the same options still rejects it independently.
 5. WebAssembly boundary tests verify the memory-component sum, buffered and chunked differences, raw-output rejection, ordered and Adam7 layouts, low-memory diagnostics, and successful execution after planning.
 6. TypeScript declarations, the WebAssembly API contract, package inspection, and public API consistency checks are updated in the same phase. The Pages UI and deployment workflow remain separate later stages.
+
+### Phase 34 decisions
+
+1. The planning API increased the pinned Rust 1.85 release package beyond the existing 550,000-byte unpacked-size limit even though the stable-toolchain build remained below it.
+2. The WebAssembly release profile explicitly runs `wasm-opt -Oz`, preserving the existing package-size limit instead of weakening the release check. Development and test profiles remain unchanged.
+3. This build-only optimization does not change the public API or memory-planning contract. The release-candidate workflow continues to build and verify the package with the minimum supported Rust toolchain.

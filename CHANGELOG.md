@@ -14,6 +14,11 @@ project follows Semantic Versioning.
 - A `planThumbnailPng` WebAssembly API with plain-object input metadata, output
   geometry, complete memory breakdown, and typed memory-limit status.
 
+### Changed
+
+- Release WebAssembly packages now use `wasm-opt -Oz` explicitly so the pinned
+  Rust 1.85 build remains within the existing package-size budget.
+
 ## [0.1.0] - 2026-08-07
 
 ### Added
