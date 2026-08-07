@@ -112,6 +112,12 @@ const declarationContract = [
   "export interface PngOptions",
   'export type JpegSubsampling = "420" | "422" | "444";',
   "export interface JpegOptions",
+  'export type OutputDelivery = "buffered" | "chunks";',
+  "export interface ThumbnailPlanInput",
+  "export interface ThumbnailPlanOutput",
+  "export interface ThumbnailMemoryPlan",
+  "export interface ThumbnailPlan",
+  "delivery?: OutputDelivery | null,",
   "options?: ThumbnailOptions | null,",
   "export type ThumbnailChunkCallback = (chunk: Uint8Array) => void;",
   "onChunk: ThumbnailChunkCallback,",
@@ -132,6 +138,9 @@ for (const expected of declarationContract) {
 }
 if ((declarations.match(/export function thumbnailPng\(/g) ?? []).length !== 1) {
   throw new Error("TypeScript declarations must export exactly one thumbnailPng signature.");
+}
+if ((declarations.match(/export function planThumbnailPng\(/g) ?? []).length !== 1) {
+  throw new Error("TypeScript declarations must export exactly one planThumbnailPng signature.");
 }
 if ((declarations.match(/export function thumbnailPngToChunks\(/g) ?? []).length !== 1) {
   throw new Error("TypeScript declarations must export exactly one thumbnailPngToChunks signature.");

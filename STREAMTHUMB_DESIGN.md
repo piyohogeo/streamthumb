@@ -1331,3 +1331,12 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. Header inspection selects the ordered plan for non-interlaced input and the sparse plan for Adam7. Writer preflight includes the caller-selected adapter buffer, while raw RGBA writer delivery is rejected.
 5. The bounded chunk scan rejects APNG markers and truncated input before planning. Processing and preflight share this inspection path while execution retains its complete decoder validation.
 6. This phase adds no WebAssembly export, browser UI, Pages workflow, dependency, or publication behavior. The JavaScript API is added only after the Rust contract and tests are stable.
+
+### Phase 33 decisions
+
+1. `planThumbnailPng` accepts the same complete PNG input and options as execution plus `"buffered"` or `"chunks"` delivery. Omitted or null delivery defaults to buffered behavior.
+2. The function returns nested plain JavaScript objects for validated input metadata, output geometry, the complete `MemoryEstimate`, the configured memory limit, and `withinMemoryLimit`. The result owns no WebAssembly allocation and requires no disposal.
+3. Chunk planning supports only PNG and JPEG and includes the same 64 KiB adapter buffer as `thumbnailPngToChunks`. Buffered RGBA retains the full output frame exactly as the execution planner specifies.
+4. Options and every non-memory resource limit remain enforcing during planning. A working-memory shortfall is the only limit represented as data; execution with the same options still rejects it independently.
+5. WebAssembly boundary tests verify the memory-component sum, buffered and chunked differences, raw-output rejection, ordered and Adam7 layouts, low-memory diagnostics, and successful execution after planning.
+6. TypeScript declarations, the WebAssembly API contract, package inspection, and public API consistency checks are updated in the same phase. The Pages UI and deployment workflow remain separate later stages.

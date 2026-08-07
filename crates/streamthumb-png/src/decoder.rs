@@ -179,6 +179,7 @@ pub struct PngInputInfo {
 pub struct PngThumbnailPlan {
     pub input: PngInputInfo,
     pub processing: ProcessingPlan,
+    pub output_format: OutputFormat,
     pub configured_max_working_memory_bytes: usize,
     pub within_memory_limit: bool,
 }
@@ -244,6 +245,7 @@ fn preflight_thumbnail_png_with_storage<R: BufRead + Seek>(
     Ok(PngThumbnailPlan {
         input: inspection.input,
         processing,
+        output_format: options.output,
         configured_max_working_memory_bytes,
         within_memory_limit: processing.memory.total_bytes <= configured_max_working_memory_bytes,
     })

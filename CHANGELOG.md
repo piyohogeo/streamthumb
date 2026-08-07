@@ -11,6 +11,8 @@ project follows Semantic Versioning.
   estimate without weakening execution-time enforcement of the configured limit.
 - PNG header inspection metadata and buffered or direct-writer preflight APIs for
   the planned browser demo.
+- A `planThumbnailPng` WebAssembly API with plain-object input metadata, output
+  geometry, complete memory breakdown, and typed memory-limit status.
 
 ## [0.1.0] - 2026-08-07
 

@@ -7,15 +7,19 @@ The `@streamthumb/wasm` package exposes a runtime-neutral byte-array API for bou
 Import the default initializer and call it once before using the named exports:
 
 ```js
-import init, { thumbnailPng, thumbnailPngToChunks } from "@streamthumb/wasm";
+import init, {
+  planThumbnailPng,
+  thumbnailPng,
+  thumbnailPngToChunks,
+} from "@streamthumb/wasm";
 
 await init();
 ```
 
 Browsers can let the initializer fetch the adjacent WebAssembly file. Filesystem runtimes should resolve the package module, read `streamthumb_wasm_bg.wasm`, and pass its bytes as `module_or_path`. The [Node.js](../examples/node) and [Deno](../examples/deno) examples show that pattern.
 
-Initialization is asynchronous. `thumbnailPng` and `thumbnailPngToChunks` are
-synchronous after initialization.
+Initialization is asynchronous. `planThumbnailPng`, `thumbnailPng`, and
+`thumbnailPngToChunks` are synchronous after initialization.
 
 Advanced consumers may instead call `initSync({ module })` with WebAssembly
 bytes or a precompiled `WebAssembly.Module`. The asynchronous initializer is
@@ -24,6 +28,14 @@ preferred unless the caller already owns a synchronously available module.
 ## Function
 
 ```ts
+type OutputDelivery = "buffered" | "chunks";
+
+function planThumbnailPng(
+  input: Uint8Array,
+  options?: ThumbnailOptions | null,
+  delivery?: OutputDelivery | null,
+): ThumbnailPlan;
+
 function thumbnailPng(
   input: Uint8Array,
   options?: ThumbnailOptions | null,
@@ -37,6 +49,18 @@ function thumbnailPngToChunks(
 ```
 
 `input` contains one encoded PNG. Passing it into WebAssembly copies the input bytes. An omitted, `undefined`, or `null` options value selects every default below.
+
+`planThumbnailPng` validates PNG header metadata, options, and every input and
+output resource limit without decoding image pixels. It uses the same Rust
+geometry and memory planner as execution. The default `"buffered"` delivery
+matches `thumbnailPng`; `"chunks"` matches `thumbnailPngToChunks` and includes
+its 64 KiB adapter buffer. Chunk delivery supports only PNG and JPEG output.
+
+The planning call does not enforce only the final `maxMemoryBytes` comparison.
+Instead, it returns the required conservative total, configured limit, and a
+typed `withinMemoryLimit` result. All other validation still throws. The
+thumbnail functions independently plan again and continue to enforce the
+working-memory limit before processing.
 
 `thumbnailPngToChunks` supports encoded PNG and JPEG output. It calls `onChunk`
 synchronously while encoding and does not retain the complete encoded result in
@@ -123,6 +147,51 @@ fixed Huffman tables. Width and height must each be at most 65,535 pixels.
 
 ## Result
 
+`planThumbnailPng` returns a plain JavaScript `ThumbnailPlan` object:
+
+```ts
+interface ThumbnailPlan {
+  input: {
+    width: number;
+    height: number;
+    encodedBytes: number;
+    colorType: "grayscale" | "rgb" | "indexed" | "grayscale-alpha" | "rgba";
+    bitDepth: number;
+    interlaced: boolean;
+  };
+  output: {
+    width: number;
+    height: number;
+    format: "png" | "jpeg" | "rgba";
+  };
+  memory: {
+    decoderRowsBytes: number;
+    decoderStagingBytes: number;
+    normalizedRowBytes: number;
+    horizontalAccumulatorBytes: number;
+    verticalAccumulatorBytes: number;
+    sparseAccumulatorBytes: number;
+    outputRowBytes: number;
+    outputRgbaBytes: number;
+    encoderStateBytes: number;
+    encodedOutputBytes: number;
+    totalBytes: number;
+  };
+  configuredMaxMemoryBytes: number;
+  withinMemoryLimit: boolean;
+}
+```
+
+Non-interlaced input uses the ordered row accumulators. Adam7 input uses the
+sparse accumulator, so `sparseAccumulatorBytes` is non-zero while the two
+ordered accumulator fields are zero. Buffered RGBA includes the complete
+output frame. Buffered PNG and JPEG include retained encoded output; chunk
+delivery replaces that retained result with the 64 KiB adapter buffer.
+
+This result owns no WebAssembly allocation and has no `free()` method. The
+estimate excludes the caller-owned input, JavaScript-retained chunks, combined
+JavaScript output, preview objects, and WebAssembly runtime overhead.
+
 `thumbnailPng` returns a `ThumbnailResult` with these getters:
 
 | Property | Type | Contract |
@@ -180,12 +249,18 @@ The encoded byte limit is checked before parsing. Declared dimensions, pixels, o
 
 ## Errors and resource limits
 
-The initializer rejects its promise when WebAssembly loading or compilation fails. After successful initialization, both thumbnail functions throw synchronously for:
+The initializer rejects its promise when WebAssembly loading or compilation
+fails. After successful initialization, all three thumbnail functions throw
+synchronously for:
 
 - invalid option types, unsupported option values, zero operational dimensions, or out-of-range numbers;
 - malformed, unsupported, truncated, or animated PNG input;
 - input, output, or working-memory limit violations;
 - checked arithmetic overflow, allocation failure, or internal consistency failure.
+
+`planThumbnailPng` reports a working-memory limit shortfall through
+`withinMemoryLimit: false` rather than throwing. Execution with the same options
+still throws. Other resource-limit and validation failures throw normally.
 
 `thumbnailPngToChunks` additionally rejects raw RGBA output. A callback may
 throw any JavaScript value; that value is propagated without replacing it with

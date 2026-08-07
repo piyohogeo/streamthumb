@@ -6,12 +6,14 @@ use std::{
     rc::Rc,
 };
 
-use js_sys::{Function, Reflect, Uint8Array};
+use js_sys::{Function, Object, Reflect, Uint8Array};
 use streamthumb_core::{Filter, Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
-    JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngOptions,
-    ThumbnailOutput, thumbnail_jpeg_to_writer_with_options_and_buffer,
-    thumbnail_png as create_thumbnail, thumbnail_png_to_writer_with_encoder_options_and_buffer,
+    JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngInputColorType,
+    PngOptions, PngThumbnailPlan, ThumbnailOutput, preflight_thumbnail_png,
+    preflight_thumbnail_png_to_writer_with_buffer,
+    thumbnail_jpeg_to_writer_with_options_and_buffer, thumbnail_png as create_thumbnail,
+    thumbnail_png_to_writer_with_encoder_options_and_buffer,
     thumbnail_png_with_encoder_options as create_thumbnail_with_png_options,
     thumbnail_png_with_jpeg_options as create_thumbnail_with_jpeg_options,
 };
@@ -76,6 +78,57 @@ export interface ThumbnailOptions {
     maxMemoryBytes?: number;
 }
 
+/** Selects the memory model used to plan output delivery. */
+export type OutputDelivery = "buffered" | "chunks";
+
+/** PNG metadata validated without decoding image pixels. */
+export interface ThumbnailPlanInput {
+    width: number;
+    height: number;
+    encodedBytes: number;
+    colorType: "grayscale" | "rgb" | "indexed" | "grayscale-alpha" | "rgba";
+    bitDepth: number;
+    interlaced: boolean;
+}
+
+/** Planned output geometry and format. */
+export interface ThumbnailPlanOutput {
+    width: number;
+    height: number;
+    format: ThumbnailOutputFormat;
+}
+
+/** Conservative Rust-owned working-memory estimate. */
+export interface ThumbnailMemoryPlan {
+    decoderRowsBytes: number;
+    decoderStagingBytes: number;
+    normalizedRowBytes: number;
+    horizontalAccumulatorBytes: number;
+    verticalAccumulatorBytes: number;
+    sparseAccumulatorBytes: number;
+    outputRowBytes: number;
+    outputRgbaBytes: number;
+    encoderStateBytes: number;
+    encodedOutputBytes: number;
+    totalBytes: number;
+}
+
+/** Plain-object result returned by planThumbnailPng. */
+export interface ThumbnailPlan {
+    input: ThumbnailPlanInput;
+    output: ThumbnailPlanOutput;
+    memory: ThumbnailMemoryPlan;
+    configuredMaxMemoryBytes: number;
+    withinMemoryLimit: boolean;
+}
+
+/** Inspects and plans a thumbnail without decoding image pixels. */
+export function planThumbnailPng(
+    input: Uint8Array,
+    options?: ThumbnailOptions | null,
+    delivery?: OutputDelivery | null,
+): ThumbnailPlan;
+
 /** Creates a bounded PNG, JPEG, or RGBA thumbnail from encoded PNG bytes. */
 export function thumbnailPng(
     input: Uint8Array,
@@ -111,6 +164,30 @@ pub fn wasm_memory_bytes() -> u32 {
     let memory = wasm_bindgen::memory().unchecked_into::<js_sys::WebAssembly::Memory>();
     let buffer = memory.buffer().unchecked_into::<js_sys::ArrayBuffer>();
     buffer.byte_length()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputDelivery {
+    Buffered,
+    Chunks,
+}
+
+/// Inspects and plans a thumbnail without decoding image pixels.
+#[wasm_bindgen(js_name = planThumbnailPng, skip_typescript)]
+pub fn plan_thumbnail_png(
+    input: &[u8],
+    options: &JsValue,
+    delivery: &JsValue,
+) -> Result<JsValue, JsError> {
+    let (options, _, _) = parse_options(options)?;
+    let plan = match parse_output_delivery(delivery)? {
+        OutputDelivery::Buffered => preflight_thumbnail_png(input, &options),
+        OutputDelivery::Chunks => {
+            preflight_thumbnail_png_to_writer_with_buffer(input, &options, OUTPUT_CHUNK_BYTES)
+        }
+    }
+    .map_err(|error| JsError::new(&error.to_string()))?;
+    thumbnail_plan_object(plan)
 }
 
 /// Creates a bounded PNG, JPEG, or RGBA thumbnail from encoded PNG bytes.
@@ -506,6 +583,134 @@ fn parse_options(value: &JsValue) -> Result<(ThumbnailOptions, PngOptions, JpegO
     Ok((options, png_options, jpeg_options))
 }
 
+fn parse_output_delivery(value: &JsValue) -> Result<OutputDelivery, JsError> {
+    if value.is_null() || value.is_undefined() {
+        return Ok(OutputDelivery::Buffered);
+    }
+    match value.as_string().as_deref() {
+        Some("buffered") => Ok(OutputDelivery::Buffered),
+        Some("chunks") => Ok(OutputDelivery::Chunks),
+        _ => Err(JsError::new("delivery must be \"buffered\" or \"chunks\"")),
+    }
+}
+
+fn thumbnail_plan_object(plan: PngThumbnailPlan) -> Result<JsValue, JsError> {
+    let input = Object::new();
+    set_number(&input, "width", plan.input.dimensions.width)?;
+    set_number(&input, "height", plan.input.dimensions.height)?;
+    set_number(&input, "encodedBytes", plan.input.encoded_bytes)?;
+    set_string(
+        &input,
+        "colorType",
+        png_input_color_type_name(plan.input.color_type),
+    )?;
+    set_number(&input, "bitDepth", plan.input.bit_depth)?;
+    set_bool(&input, "interlaced", plan.input.interlaced)?;
+
+    let output = Object::new();
+    set_number(&output, "width", plan.processing.output.width)?;
+    set_number(&output, "height", plan.processing.output.height)?;
+    set_string(&output, "format", output_format_name(plan.output_format))?;
+
+    let memory = Object::new();
+    let estimate = plan.processing.memory;
+    for (name, value) in [
+        ("decoderRowsBytes", estimate.decoder_rows_bytes),
+        ("decoderStagingBytes", estimate.decoder_staging_bytes),
+        ("normalizedRowBytes", estimate.normalized_row_bytes),
+        (
+            "horizontalAccumulatorBytes",
+            estimate.horizontal_accumulator_bytes,
+        ),
+        (
+            "verticalAccumulatorBytes",
+            estimate.vertical_accumulator_bytes,
+        ),
+        ("sparseAccumulatorBytes", estimate.sparse_accumulator_bytes),
+        ("outputRowBytes", estimate.output_row_bytes),
+        ("outputRgbaBytes", estimate.output_rgba_bytes),
+        ("encoderStateBytes", estimate.encoder_state_bytes),
+        ("encodedOutputBytes", estimate.encoded_output_bytes),
+        ("totalBytes", estimate.total_bytes),
+    ] {
+        set_number(&memory, name, value)?;
+    }
+
+    let result = Object::new();
+    set_property(&result, "input", input.as_ref())?;
+    set_property(&result, "output", output.as_ref())?;
+    set_property(&result, "memory", memory.as_ref())?;
+    set_number(
+        &result,
+        "configuredMaxMemoryBytes",
+        plan.configured_max_working_memory_bytes,
+    )?;
+    set_bool(&result, "withinMemoryLimit", plan.within_memory_limit)?;
+    Ok(result.into())
+}
+
+trait JsNumber {
+    fn to_f64(self) -> f64;
+}
+
+impl JsNumber for u8 {
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+}
+
+impl JsNumber for u32 {
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+}
+
+impl JsNumber for u64 {
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
+}
+
+impl JsNumber for usize {
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
+}
+
+fn set_number<T: JsNumber>(object: &Object, name: &str, value: T) -> Result<(), JsError> {
+    set_property(object, name, &JsValue::from_f64(value.to_f64()))
+}
+
+fn set_string(object: &Object, name: &str, value: &str) -> Result<(), JsError> {
+    set_property(object, name, &JsValue::from_str(value))
+}
+
+fn set_bool(object: &Object, name: &str, value: bool) -> Result<(), JsError> {
+    set_property(object, name, &JsValue::from_bool(value))
+}
+
+fn set_property(object: &Object, name: &str, value: &JsValue) -> Result<(), JsError> {
+    let written = Reflect::set(object.as_ref(), &JsValue::from_str(name), value)
+        .map_err(|_| JsError::new(&format!("could not write plan property {name}")))?;
+    if written {
+        Ok(())
+    } else {
+        Err(JsError::new(&format!(
+            "could not write plan property {name}"
+        )))
+    }
+}
+
+const fn png_input_color_type_name(color: PngInputColorType) -> &'static str {
+    match color {
+        PngInputColorType::Grayscale => "grayscale",
+        PngInputColorType::Rgb => "rgb",
+        PngInputColorType::Indexed => "indexed",
+        PngInputColorType::GrayscaleAlpha => "grayscale-alpha",
+        PngInputColorType::Rgba => "rgba",
+    }
+}
+
 fn parse_png_options(value: &JsValue) -> Result<PngOptions, JsError> {
     if !value.is_object() || js_sys::Array::is_array(value) {
         return Err(JsError::new("png must be an object"));
@@ -739,6 +944,43 @@ mod browser_tests {
         options
     }
 
+    fn property(object: &JsValue, name: &str) -> JsValue {
+        Reflect::get(object, &JsValue::from_str(name))
+            .unwrap_or_else(|_| panic!("plan property {name} must be readable"))
+    }
+
+    fn number_property(object: &JsValue, name: &str) -> f64 {
+        property(object, name)
+            .as_f64()
+            .unwrap_or_else(|| panic!("plan property {name} must be numeric"))
+    }
+
+    fn bool_property(object: &JsValue, name: &str) -> bool {
+        property(object, name)
+            .as_bool()
+            .unwrap_or_else(|| panic!("plan property {name} must be boolean"))
+    }
+
+    fn adam7_header_input() -> Vec<u8> {
+        let mut input = PNG_INPUT.to_vec();
+        input[28] = 1;
+        let crc = crc32(&input[12..29]).to_be_bytes();
+        input[29..33].copy_from_slice(&crc);
+        input
+    }
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                let mask = 0_u32.wrapping_sub(crc & 1);
+                crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+            }
+        }
+        !crc
+    }
+
     fn high_entropy_png() -> Vec<u8> {
         const DIMENSION: u32 = 256;
         let mut state = 0x6d2b_79f5_u32;
@@ -794,6 +1036,127 @@ mod browser_tests {
                 .expect("the thumbnail options object must be writable");
         }
         options
+    }
+
+    #[wasm_bindgen_test]
+    fn returns_a_complete_plain_object_thumbnail_plan() {
+        let plan = plan_thumbnail_png(PNG_INPUT, &JsValue::NULL, &JsValue::UNDEFINED)
+            .expect("default planning must succeed");
+        let input = property(&plan, "input");
+        let output = property(&plan, "output");
+        let memory = property(&plan, "memory");
+
+        assert_eq!(number_property(&input, "width"), 32.0);
+        assert_eq!(number_property(&input, "height"), 32.0);
+        assert_eq!(
+            number_property(&input, "encodedBytes"),
+            PNG_INPUT.len() as f64
+        );
+        assert_eq!(
+            property(&input, "colorType").as_string().as_deref(),
+            Some("rgba")
+        );
+        assert_eq!(number_property(&input, "bitDepth"), 8.0);
+        assert!(!bool_property(&input, "interlaced"));
+        assert_eq!(number_property(&output, "width"), 32.0);
+        assert_eq!(number_property(&output, "height"), 32.0);
+        assert_eq!(
+            property(&output, "format").as_string().as_deref(),
+            Some("png")
+        );
+        assert_eq!(
+            number_property(&plan, "configuredMaxMemoryBytes"),
+            32.0 * 1024.0 * 1024.0
+        );
+        assert!(bool_property(&plan, "withinMemoryLimit"));
+        assert!(property(&plan, "free").is_undefined());
+
+        let components = [
+            "decoderRowsBytes",
+            "decoderStagingBytes",
+            "normalizedRowBytes",
+            "horizontalAccumulatorBytes",
+            "verticalAccumulatorBytes",
+            "sparseAccumulatorBytes",
+            "outputRowBytes",
+            "outputRgbaBytes",
+            "encoderStateBytes",
+            "encodedOutputBytes",
+        ];
+        let sum = components
+            .iter()
+            .map(|name| number_property(&memory, name))
+            .sum::<f64>();
+        assert_eq!(number_property(&memory, "totalBytes"), sum);
+    }
+
+    #[wasm_bindgen_test]
+    fn distinguishes_buffered_chunked_rgba_and_adam7_plans() {
+        let buffered =
+            plan_thumbnail_png(PNG_INPUT, &JsValue::NULL, &JsValue::from_str("buffered"))
+                .expect("buffered planning must succeed");
+        let chunks = plan_thumbnail_png(PNG_INPUT, &JsValue::NULL, &JsValue::from_str("chunks"))
+            .expect("chunk planning must succeed");
+        assert!(number_property(&property(&buffered, "memory"), "encodedOutputBytes") > 0.0);
+        assert_eq!(
+            number_property(&property(&chunks, "memory"), "encodedOutputBytes"),
+            OUTPUT_CHUNK_BYTES as f64
+        );
+
+        let rgba_options = options_with("output", &JsValue::from_str("rgba"));
+        let rgba = plan_thumbnail_png(
+            PNG_INPUT,
+            rgba_options.as_ref(),
+            &JsValue::from_str("buffered"),
+        )
+        .expect("RGBA buffered planning must succeed");
+        assert!(number_property(&property(&rgba, "memory"), "outputRgbaBytes") > 0.0);
+        assert!(
+            plan_thumbnail_png(
+                PNG_INPUT,
+                rgba_options.as_ref(),
+                &JsValue::from_str("chunks"),
+            )
+            .is_err()
+        );
+
+        let adam7 = plan_thumbnail_png(&adam7_header_input(), &JsValue::NULL, &JsValue::UNDEFINED)
+            .expect("Adam7 header planning must succeed");
+        assert!(bool_property(&property(&adam7, "input"), "interlaced"));
+        let memory = property(&adam7, "memory");
+        assert!(number_property(&memory, "sparseAccumulatorBytes") > 0.0);
+        assert_eq!(number_property(&memory, "horizontalAccumulatorBytes"), 0.0);
+        assert_eq!(number_property(&memory, "verticalAccumulatorBytes"), 0.0);
+    }
+
+    #[wasm_bindgen_test]
+    fn reports_memory_rejection_before_the_enforcing_call() {
+        let options = options_with("maxMemoryBytes", &JsValue::from_f64(1.0));
+        let plan = plan_thumbnail_png(PNG_INPUT, options.as_ref(), &JsValue::UNDEFINED)
+            .expect("planning must return a below-limit result");
+
+        assert!(!bool_property(&plan, "withinMemoryLimit"));
+        assert_eq!(number_property(&plan, "configuredMaxMemoryBytes"), 1.0);
+        assert!(number_property(&property(&plan, "memory"), "totalBytes") > 1.0);
+        assert!(thumbnail_png(PNG_INPUT, options.as_ref()).is_err());
+        assert!(
+            plan_thumbnail_png(PNG_INPUT, &JsValue::NULL, &JsValue::from_str("stream")).is_err()
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn planned_options_remain_executable() {
+        let options = options_with("maxWidth", &JsValue::from_f64(8.0));
+        let plan = plan_thumbnail_png(PNG_INPUT, options.as_ref(), &JsValue::UNDEFINED)
+            .expect("planning must succeed");
+        let output = property(&plan, "output");
+        let result = thumbnail_png(PNG_INPUT, options.as_ref()).expect("execution must succeed");
+
+        assert_eq!(number_property(&output, "width"), f64::from(result.width()));
+        assert_eq!(
+            number_property(&output, "height"),
+            f64::from(result.height())
+        );
     }
 
     #[wasm_bindgen_test]
