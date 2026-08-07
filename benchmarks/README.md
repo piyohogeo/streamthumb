@@ -70,8 +70,10 @@ The runner requires `wasm-pack` and Node.js. Its JSON Lines output is written to
 `benchmarks/results/wasm-<profile>.jsonl`.
 
 On Linux, use `./benchmarks/run-wasm.sh smoke 512`. The GitHub `Benchmarks`
-workflow exposes all three profiles as a manual action and uploads native and WASM
-JSON Lines files as workflow artifacts.
+workflow exposes all three profiles and a configurable maximum output dimension
+as manual inputs. It uploads native and WASM JSON Lines files as workflow
+artifacts. Use a maximum dimension of 2,048 with the `smoke` profile to reproduce
+the large-output measurements in the checked-in report.
 
 ## jSquash benchmark
 

@@ -4,8 +4,9 @@
 
 This report is a reproducible Phase 7 baseline. It compares the production
 streamthumb pipeline with a full-frame image-rs native pipeline and a jSquash
-WebAssembly PNG decode, resize, and encode pipeline. All outputs use a maximum
-dimension of 512 pixels.
+WebAssembly PNG decode, resize, and encode pipeline. The main baseline uses a
+maximum dimension of 512 pixels. A separate large-output run uses 2,048 pixels
+to make output-buffer scaling visible.
 
 The measurements below are a single smoke run on a Windows development machine
 using Rust 1.97.1, image 0.25.8, Node.js 24.14.1, and wasm-pack 0.15.0. They are
@@ -37,6 +38,47 @@ the encoder's data and chunk layout; regression tests decode both results and
 require exact RGBA pixel equivalence. These numbers use the same Windows
 development environment described below and are architectural evidence, not
 stable release thresholds.
+
+## Large-output PNG and JPEG comparison
+
+A second smoke run raises the maximum output dimension from 512 to 2,048. It
+uses the same Windows development environment and fresh processes as the main
+baseline. Both streamthumb codecs consume resized rows directly. The public
+convenience API still returns one complete encoded byte buffer, so the memory
+figures include encoded bytes but not a complete uncompressed output frame.
+
+### Native, 2,048 maximum dimension
+
+| Input | Codec | Output dimensions | Runtime | Peak RSS | Encoded output |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 2,048 x 2,048 blank | PNG | 2,048 x 2,048 | 276.5 ms | 4.57 MiB | 20.7 KiB |
+| 2,048 x 2,048 blank | JPEG | 2,048 x 2,048 | 312.9 ms | 4.28 MiB | 65.4 KiB |
+| 64 x 8,192 noise | PNG | 16 x 2,048 | 38.2 ms | 6.03 MiB | 99.0 KiB |
+| 64 x 8,192 noise | JPEG | 16 x 2,048 | 25.9 ms | 5.49 MiB | 14.6 KiB |
+| 8,192 x 64 gradient | PNG | 2,048 x 16 | 19.5 ms | 4.64 MiB | 1.1 KiB |
+| 8,192 x 64 gradient | JPEG | 2,048 x 16 | 25.8 ms | 4.26 MiB | 6.7 KiB |
+
+### WebAssembly, 2,048 maximum dimension
+
+| Input | Codec | Output dimensions | Runtime | Linear-memory high-water | Linear-memory growth | Encoded output |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 2,048 x 2,048 blank | PNG | 2,048 x 2,048 | 666.7 ms | 2.38 MiB | 1.25 MiB | 20.7 KiB |
+| 2,048 x 2,048 blank | JPEG | 2,048 x 2,048 | 638.1 ms | 2.13 MiB | 1.00 MiB | 65.4 KiB |
+| 64 x 8,192 noise | PNG | 16 x 2,048 | 86.7 ms | 3.81 MiB | 2.69 MiB | 99.0 KiB |
+| 64 x 8,192 noise | JPEG | 16 x 2,048 | 70.0 ms | 3.44 MiB | 2.31 MiB | 14.6 KiB |
+| 8,192 x 64 gradient | PNG | 2,048 x 16 | 58.2 ms | 2.44 MiB | 1.31 MiB | 1.1 KiB |
+| 8,192 x 64 gradient | JPEG | 2,048 x 16 | 59.4 ms | 2.13 MiB | 1.00 MiB | 6.7 KiB |
+
+An uncompressed 2,048 x 2,048 RGBA frame is 16 MiB. The square measurements
+remain far below that amount in both codecs, which is direct evidence that the
+encoded paths scale with row state and encoded bytes instead of retaining that
+frame. The tall noise case has a 1.73 MiB encoded input copied into WASM and a
+larger PNG result, explaining why its high-water mark exceeds the square case.
+
+The optimized streamthumb WebAssembly binary is 306.6 KiB after adding JPEG.
+The earlier PNG-only baseline was 228.7 KiB, so the measured codec addition is
+77.9 KiB (about 34%). JavaScript glue and package metadata remain excluded from
+both values.
 
 ## Native results
 
