@@ -1,4 +1,4 @@
-use std::io::{BufReader, Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom, Write};
 
 use png::{BitDepth, ColorType};
 use streamthumb_core::{
@@ -20,14 +20,13 @@ enum EncodedOutputStorage {
 }
 
 struct SeekableInput<R> {
-    reader: BufReader<R>,
+    reader: R,
     start: u64,
     encoded_bytes: u64,
 }
 
-impl<R: Read + Seek> SeekableInput<R> {
-    fn new(reader: R, options: &ThumbnailOptions) -> Result<Self> {
-        let mut reader = BufReader::new(reader);
+impl<R: BufRead + Seek> SeekableInput<R> {
+    fn new(mut reader: R, options: &ThumbnailOptions) -> Result<Self> {
         let start = reader.stream_position().map_err(Error::InputIo)?;
         let end = reader.seek(SeekFrom::End(0)).map_err(Error::InputIo)?;
         let encoded_bytes = end.checked_sub(start).ok_or_else(|| {
@@ -47,7 +46,7 @@ impl<R: Read + Seek> SeekableInput<R> {
         })
     }
 
-    fn rewind(&mut self) -> Result<&mut BufReader<R>> {
+    fn rewind(&mut self) -> Result<&mut R> {
         self.reader
             .seek(SeekFrom::Start(self.start))
             .map_err(Error::InputIo)?;
@@ -109,6 +108,13 @@ impl<R: Read + Seek> SeekableInput<R> {
     }
 }
 
+fn buffered_input<R: Read + Seek>(
+    reader: R,
+    options: &ThumbnailOptions,
+) -> Result<SeekableInput<BufReader<R>>> {
+    SeekableInput::new(BufReader::new(reader), options)
+}
+
 fn map_metadata_io<T>(error: std::io::Error) -> Result<T> {
     if error.kind() == std::io::ErrorKind::UnexpectedEof {
         Err(Error::TruncatedInput)
@@ -145,7 +151,13 @@ pub fn decode_png_rows<F>(
 where
     F: FnMut(RgbaRow<'_>) -> Result<()>,
 {
-    decode_png_rows_from_reader(Cursor::new(input), options, consume_row)
+    let mut input = SeekableInput::new(Cursor::new(input), options)?;
+    decode_png_rows_with_storage(
+        &mut input,
+        options,
+        EncodedOutputStorage::Buffered,
+        consume_row,
+    )
 }
 
 /// Decodes a seekable PNG reader one row at a time and normalizes each row to RGBA8.
@@ -161,7 +173,7 @@ where
     R: Read + Seek,
     F: FnMut(RgbaRow<'_>) -> Result<()>,
 {
-    let mut input = SeekableInput::new(reader, options)?;
+    let mut input = buffered_input(reader, options)?;
     decode_png_rows_with_storage(
         &mut input,
         options,
@@ -177,7 +189,7 @@ fn decode_png_rows_with_storage<R, F>(
     mut consume_row: F,
 ) -> Result<DecodedPngInfo>
 where
-    R: Read + Seek,
+    R: BufRead + Seek,
     F: FnMut(RgbaRow<'_>) -> Result<()>,
 {
     let encoded_bytes = input.encoded_bytes;
@@ -287,7 +299,10 @@ where
 
 /// Decodes and area-downsamples a supported PNG into a bounded RGBA8 image.
 pub fn thumbnail_png_rgba(input: &[u8], options: &ThumbnailOptions) -> Result<RgbaImage> {
-    thumbnail_png_rgba_from_reader(Cursor::new(input), options)
+    let mut rgba_options = *options;
+    rgba_options.output = OutputFormat::Rgba;
+    let mut input = SeekableInput::new(Cursor::new(input), &rgba_options)?;
+    thumbnail_png_rgba_planned(&mut input, &rgba_options).map(|(image, _)| image)
 }
 
 /// Decodes and area-downsamples a seekable PNG reader into bounded RGBA8 output.
@@ -297,13 +312,21 @@ pub fn thumbnail_png_rgba_from_reader<R: Read + Seek>(
 ) -> Result<RgbaImage> {
     let mut rgba_options = *options;
     rgba_options.output = OutputFormat::Rgba;
-    let mut input = SeekableInput::new(reader, &rgba_options)?;
+    let mut input = buffered_input(reader, &rgba_options)?;
     thumbnail_png_rgba_planned(&mut input, &rgba_options).map(|(image, _)| image)
 }
 
 /// Creates a thumbnail using the output representation selected in `options`.
 pub fn thumbnail_png(input: &[u8], options: &ThumbnailOptions) -> Result<ThumbnailOutput> {
-    thumbnail_png_from_reader(Cursor::new(input), options)
+    match options.output {
+        OutputFormat::Rgba => Ok(thumbnail_png_rgba(input, options)?.into()),
+        OutputFormat::Png => {
+            thumbnail_png_with_encoder_options(input, options, &PngOptions::default())
+        }
+        OutputFormat::Jpeg => {
+            thumbnail_png_with_jpeg_options(input, options, &JpegOptions::default())
+        }
+    }
 }
 
 /// Creates a thumbnail from a seekable PNG reader.
@@ -313,7 +336,7 @@ pub fn thumbnail_png_from_reader<R: Read + Seek>(
 ) -> Result<ThumbnailOutput> {
     match options.output {
         OutputFormat::Rgba => {
-            let mut input = SeekableInput::new(reader, options)?;
+            let mut input = buffered_input(reader, options)?;
             let (image, _) = thumbnail_png_rgba_planned(&mut input, options)?;
             Ok(image.into())
         }
@@ -334,7 +357,8 @@ pub fn thumbnail_png_with_encoder_options(
     options: &ThumbnailOptions,
     png_options: &PngOptions,
 ) -> Result<ThumbnailOutput> {
-    thumbnail_png_from_reader_with_encoder_options(Cursor::new(input), options, png_options)
+    let mut input = SeekableInput::new(Cursor::new(input), options)?;
+    thumbnail_png_with_encoder_options_from_input(&mut input, options, png_options)
 }
 
 /// Creates a PNG thumbnail from a seekable reader with codec-specific settings.
@@ -343,11 +367,19 @@ pub fn thumbnail_png_from_reader_with_encoder_options<R: Read + Seek>(
     options: &ThumbnailOptions,
     png_options: &PngOptions,
 ) -> Result<ThumbnailOutput> {
+    let mut input = buffered_input(reader, options)?;
+    thumbnail_png_with_encoder_options_from_input(&mut input, options, png_options)
+}
+
+fn thumbnail_png_with_encoder_options_from_input<R: BufRead + Seek>(
+    input: &mut SeekableInput<R>,
+    options: &ThumbnailOptions,
+    png_options: &PngOptions,
+) -> Result<ThumbnailOutput> {
     if options.output != OutputFormat::Png {
         return Err(Error::InvalidPngOptions("PNG settings require PNG output"));
     }
-    let mut input = SeekableInput::new(reader, options)?;
-    let (bytes, plan) = thumbnail_png_encoded(&mut input, options, *png_options)?;
+    let (bytes, plan) = thumbnail_png_encoded(input, options, *png_options)?;
     Ok(ThumbnailOutput::Encoded {
         bytes,
         width: plan.output.width,
@@ -365,7 +397,8 @@ pub fn thumbnail_png_with_jpeg_options(
     options: &ThumbnailOptions,
     jpeg_options: &JpegOptions,
 ) -> Result<ThumbnailOutput> {
-    thumbnail_png_from_reader_with_jpeg_options(Cursor::new(input), options, jpeg_options)
+    let mut input = SeekableInput::new(Cursor::new(input), options)?;
+    thumbnail_png_with_jpeg_options_from_input(&mut input, options, jpeg_options)
 }
 
 /// Creates a JPEG thumbnail from a seekable reader with codec-specific settings.
@@ -374,13 +407,21 @@ pub fn thumbnail_png_from_reader_with_jpeg_options<R: Read + Seek>(
     options: &ThumbnailOptions,
     jpeg_options: &JpegOptions,
 ) -> Result<ThumbnailOutput> {
+    let mut input = buffered_input(reader, options)?;
+    thumbnail_png_with_jpeg_options_from_input(&mut input, options, jpeg_options)
+}
+
+fn thumbnail_png_with_jpeg_options_from_input<R: BufRead + Seek>(
+    input: &mut SeekableInput<R>,
+    options: &ThumbnailOptions,
+    jpeg_options: &JpegOptions,
+) -> Result<ThumbnailOutput> {
     if options.output != OutputFormat::Jpeg {
         return Err(Error::InvalidJpegOptions(
             "JPEG settings require JPEG output",
         ));
     }
-    let mut input = SeekableInput::new(reader, options)?;
-    let (bytes, plan) = thumbnail_jpeg_encoded(&mut input, options, *jpeg_options)?;
+    let (bytes, plan) = thumbnail_jpeg_encoded(input, options, *jpeg_options)?;
     Ok(ThumbnailOutput::Encoded {
         bytes,
         width: plan.output.width,
@@ -396,7 +437,7 @@ pub fn thumbnail_png_to_writer<W: Write + 'static>(
     options: &ThumbnailOptions,
     writer: W,
 ) -> Result<ThumbnailInfo> {
-    thumbnail_png_from_reader_to_writer(Cursor::new(input), options, writer)
+    thumbnail_png_to_writer_with_encoder_options(input, options, &PngOptions::default(), writer)
 }
 
 /// Writes a PNG thumbnail from a seekable reader with default PNG settings.
@@ -427,12 +468,7 @@ pub fn thumbnail_png_to_writer_with_encoder_options<W: Write + 'static>(
     png_options: &PngOptions,
     writer: W,
 ) -> Result<ThumbnailInfo> {
-    thumbnail_png_from_reader_to_writer_with_encoder_options(
-        Cursor::new(input),
-        options,
-        png_options,
-        writer,
-    )
+    thumbnail_png_to_writer_with_encoder_options_and_buffer(input, options, png_options, 0, writer)
 }
 
 /// Writes a PNG thumbnail from a seekable reader directly to `writer`.
@@ -464,8 +500,9 @@ pub fn thumbnail_png_to_writer_with_encoder_options_and_buffer<W: Write + 'stati
     writer_buffer_bytes: usize,
     writer: W,
 ) -> Result<ThumbnailInfo> {
-    thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer(
-        Cursor::new(input),
+    let mut input = SeekableInput::new(Cursor::new(input), options)?;
+    thumbnail_png_to_writer_with_encoder_options_and_buffer_from_input(
+        &mut input,
         options,
         png_options,
         writer_buffer_bytes,
@@ -485,17 +522,31 @@ where
     R: Read + Seek,
     W: Write + 'static,
 {
+    let mut input = buffered_input(reader, options)?;
+    thumbnail_png_to_writer_with_encoder_options_and_buffer_from_input(
+        &mut input,
+        options,
+        png_options,
+        writer_buffer_bytes,
+        writer,
+    )
+}
+
+fn thumbnail_png_to_writer_with_encoder_options_and_buffer_from_input<
+    R: BufRead + Seek,
+    W: Write + 'static,
+>(
+    input: &mut SeekableInput<R>,
+    options: &ThumbnailOptions,
+    png_options: &PngOptions,
+    writer_buffer_bytes: usize,
+    writer: W,
+) -> Result<ThumbnailInfo> {
     if options.output != OutputFormat::Png {
         return Err(Error::InvalidPngOptions("PNG settings require PNG output"));
     }
-    let mut input = SeekableInput::new(reader, options)?;
-    let plan = thumbnail_png_encoded_to_writer(
-        &mut input,
-        options,
-        *png_options,
-        writer_buffer_bytes,
-        writer,
-    )?;
+    let plan =
+        thumbnail_png_encoded_to_writer(input, options, *png_options, writer_buffer_bytes, writer)?;
     Ok(ThumbnailInfo {
         width: plan.output.width,
         height: plan.output.height,
@@ -509,7 +560,7 @@ pub fn thumbnail_jpeg_to_writer<W: Write>(
     options: &ThumbnailOptions,
     writer: W,
 ) -> Result<ThumbnailInfo> {
-    thumbnail_jpeg_from_reader_to_writer(Cursor::new(input), options, writer)
+    thumbnail_jpeg_to_writer_with_options(input, options, &JpegOptions::default(), writer)
 }
 
 /// Writes a JPEG thumbnail from a seekable reader with default settings.
@@ -540,12 +591,7 @@ pub fn thumbnail_jpeg_to_writer_with_options<W: Write>(
     jpeg_options: &JpegOptions,
     writer: W,
 ) -> Result<ThumbnailInfo> {
-    thumbnail_jpeg_from_reader_to_writer_with_options(
-        Cursor::new(input),
-        options,
-        jpeg_options,
-        writer,
-    )
+    thumbnail_jpeg_to_writer_with_options_and_buffer(input, options, jpeg_options, 0, writer)
 }
 
 /// Writes a JPEG thumbnail from a seekable reader directly to `writer`.
@@ -577,8 +623,9 @@ pub fn thumbnail_jpeg_to_writer_with_options_and_buffer<W: Write>(
     writer_buffer_bytes: usize,
     writer: W,
 ) -> Result<ThumbnailInfo> {
-    thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer(
-        Cursor::new(input),
+    let mut input = SeekableInput::new(Cursor::new(input), options)?;
+    thumbnail_jpeg_to_writer_with_options_and_buffer_from_input(
+        &mut input,
         options,
         jpeg_options,
         writer_buffer_bytes,
@@ -598,14 +645,30 @@ where
     R: Read + Seek,
     W: Write,
 {
+    let mut input = buffered_input(reader, options)?;
+    thumbnail_jpeg_to_writer_with_options_and_buffer_from_input(
+        &mut input,
+        options,
+        jpeg_options,
+        writer_buffer_bytes,
+        writer,
+    )
+}
+
+fn thumbnail_jpeg_to_writer_with_options_and_buffer_from_input<R: BufRead + Seek, W: Write>(
+    input: &mut SeekableInput<R>,
+    options: &ThumbnailOptions,
+    jpeg_options: &JpegOptions,
+    writer_buffer_bytes: usize,
+    writer: W,
+) -> Result<ThumbnailInfo> {
     if options.output != OutputFormat::Jpeg {
         return Err(Error::InvalidJpegOptions(
             "JPEG settings require JPEG output",
         ));
     }
-    let mut input = SeekableInput::new(reader, options)?;
     let plan = thumbnail_jpeg_encoded_to_writer(
-        &mut input,
+        input,
         options,
         *jpeg_options,
         writer_buffer_bytes,
@@ -618,7 +681,7 @@ where
     })
 }
 
-fn thumbnail_jpeg_encoded_to_writer<R: Read + Seek, W: Write>(
+fn thumbnail_jpeg_encoded_to_writer<R: BufRead + Seek, W: Write>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     jpeg_options: JpegOptions,
@@ -679,7 +742,7 @@ fn thumbnail_jpeg_encoded_to_writer<R: Read + Seek, W: Write>(
     Ok(decoded.plan)
 }
 
-fn thumbnail_png_encoded_to_writer<R: Read + Seek, W: Write + 'static>(
+fn thumbnail_png_encoded_to_writer<R: BufRead + Seek, W: Write + 'static>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     png_options: PngOptions,
@@ -743,7 +806,7 @@ fn thumbnail_png_encoded_to_writer<R: Read + Seek, W: Write + 'static>(
     Ok(decoded.plan)
 }
 
-fn thumbnail_jpeg_encoded<R: Read + Seek>(
+fn thumbnail_jpeg_encoded<R: BufRead + Seek>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     jpeg_options: JpegOptions,
@@ -781,7 +844,7 @@ fn thumbnail_jpeg_encoded<R: Read + Seek>(
     Ok((bytes, decoded.plan))
 }
 
-fn thumbnail_png_encoded<R: Read + Seek>(
+fn thumbnail_png_encoded<R: BufRead + Seek>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     png_options: PngOptions,
@@ -826,7 +889,7 @@ fn thumbnail_png_encoded<R: Read + Seek>(
     Ok((bytes, decoded.plan))
 }
 
-fn thumbnail_png_rgba_planned<R: Read + Seek>(
+fn thumbnail_png_rgba_planned<R: BufRead + Seek>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
 ) -> Result<(RgbaImage, ProcessingPlan)> {
@@ -858,7 +921,7 @@ fn thumbnail_png_rgba_planned<R: Read + Seek>(
     Ok((image, decoded.plan))
 }
 
-fn png_is_interlaced<R: Read + Seek>(
+fn png_is_interlaced<R: BufRead + Seek>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
 ) -> Result<bool> {
@@ -871,7 +934,7 @@ struct PngInspection {
     auto_color: EncoderColor,
 }
 
-fn inspect_png<R: Read + Seek>(
+fn inspect_png<R: BufRead + Seek>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
 ) -> Result<PngInspection> {
@@ -946,7 +1009,7 @@ fn auto_encoder_color(info: &png::Info<'_>) -> EncoderColor {
     }
 }
 
-fn thumbnail_png_adam7_rgba_planned<R: Read + Seek>(
+fn thumbnail_png_adam7_rgba_planned<R: BufRead + Seek>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
 ) -> Result<(RgbaImage, ProcessingPlan)> {
@@ -954,14 +1017,14 @@ fn thumbnail_png_adam7_rgba_planned<R: Read + Seek>(
     Ok((downsampler.finish()?, plan))
 }
 
-fn thumbnail_png_adam7_downsampler<R: Read + Seek>(
+fn thumbnail_png_adam7_downsampler<R: BufRead + Seek>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
 ) -> Result<(SparseAreaDownsampler, ProcessingPlan)> {
     thumbnail_png_adam7_downsampler_with_storage(input, options, EncodedOutputStorage::Buffered)
 }
 
-fn thumbnail_png_adam7_downsampler_with_storage<R: Read + Seek>(
+fn thumbnail_png_adam7_downsampler_with_storage<R: BufRead + Seek>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     storage: EncodedOutputStorage,
