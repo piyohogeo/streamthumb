@@ -1,17 +1,21 @@
-# Version 0.1.0 release audit
+# Version 0.2.0 release readiness audit
 
-This document records the audit and publication evidence for version 0.1.0
-after the centered-cover, direct-writer, seekable-input, native benchmark, and
-WebAssembly chunk-output extensions. The GitHub-only release was published on
-2026-08-07; npm and crates.io publication remain outside its scope.
+This document records the release-readiness evidence for version 0.2.0 after
+the browser seekable-input, memory-preflight, and GitHub Pages extensions.
+Version 0.2.0 is an unreleased GitHub-only candidate. npm and crates.io
+publication remain outside its scope.
 
 ## Automated gates
 
-- Normal CI checks formatting, clippy with warnings denied, 126 native unit and
-  integration tests, one compiled Rustdoc example, runnable seekable-reader
-  PNG/JPEG examples, the wasm32 build, Chrome and Firefox tests, installed npm
-  tarball consumers in browsers, Node.js, and Deno, benchmark tooling, all Rust
-  packages, and two excluded incremental-input spike tests.
+- Normal CI checks formatting, clippy with warnings denied, the native unit and
+  integration suite, one compiled Rustdoc example, runnable seekable-reader
+  PNG/JPEG examples, the wasm32 build, 22 Chrome and Firefox WebAssembly tests,
+  installed npm tarball consumers in browsers, Node.js, and Deno, benchmark
+  tooling, all Rust packages, and the excluded input-feasibility spikes.
+- Pages CI generates the 2048-square RGBA sample, stamps every runtime asset
+  with the source revision, verifies seekable range reads, exercises every
+  output format, proves 128 KiB preflight rejection and 4 MiB recovery, and
+  deploys only after the Chrome smoke test succeeds.
 - Scheduled and manually dispatched fuzzing covers row decoding, all thumbnail
   output codecs and fit modes, and ordered-versus-sparse area resampling.
 - The release-candidate workflow uses Rust 1.85.0, Node.js 24.14.1, npm 11.11.0,
@@ -23,7 +27,7 @@ WebAssembly chunk-output extensions. The GitHub-only release was published on
 `cargo package --workspace --no-verify` assembles the five workspace package
 archives. The normal CI job separately compiles and tests the complete local
 workspace. Archive verification is deferred because Cargo removes internal
-path dependencies before verification and these exact `0.1.0` packages are not
+path dependencies before verification and these exact `0.2.0` packages are not
 yet available from crates.io. Internal dependencies carry both a path for
 workspace development and the exact version needed in published manifests.
 
@@ -52,19 +56,15 @@ The local audit tarball contains exactly eight files:
 - `streamthumb_wasm_bg.wasm`
 - `streamthumb_wasm_bg.wasm.d.ts`
 
-The package has no npm runtime dependencies. The current local stable-toolchain
-audit measured 194,780 packed bytes and 497,659 unpacked bytes. Its optimized
-WebAssembly file measured 454,856 bytes with SHA-256
-`b813aab4ee219f1f11a5a4b722b9ba3ebd6ab24e013598a46bca93d600d1e18c`.
-
-The most recent pinned Rust 1.85 release-candidate build measured 202,905
-packed bytes and 544,090 unpacked bytes. Its release manifest records and
-verifies the tarball SHA-256 for that exact artifact; a separately rebuilt
-tarball is not substituted during publication. Package inspection enforces a
-550,000-byte ceiling. Native `Read + Seek` support is separated from
-WebAssembly slice monomorphization so the package remains within that ceiling.
-These values are descriptive; the pinned release-candidate manifest is
-authoritative for any future release.
+The package has no npm runtime dependencies. The local pinned Rust 1.85
+v0.2.0 audit measured 208,377 packed bytes and 537,110 unpacked bytes. Its
+optimized WebAssembly file measured 486,783 bytes with SHA-256
+`7156230b3427060ee87a25c1efd6d75d853353250bade9726d9a39059dc99034`.
+Package inspection enforces the unchanged 550,000-byte ceiling. Slice and
+seekable planning and execution share internal reader drivers so the expanded
+API remains within that ceiling. These local values are descriptive; the
+post-commit pinned release-candidate manifest and checksum are authoritative
+for the release.
 
 ## License and dependency audit
 
@@ -78,9 +78,15 @@ tarball includes both project license texts.
 This inventory is a release engineering check, not legal advice. Dependency
 changes require the metadata audit to be repeated.
 
-## Publication outcome
+## Candidate outcome
 
-Version 0.1.0 was published as a
+Version 0.2.0 has not been tagged or published. Before release, the exact
+version commit must pass push-triggered CI plus explicitly dispatched CI, Fuzz,
+Benchmarks, Release Candidate, and Pages workflows. The candidate artifact must
+then be downloaded and verified against its source revision, manifest, byte
+size, and SHA-256 before a signed tag or GitHub Release is created.
+
+Version 0.1.0 remains published as a
 [GitHub Release](https://github.com/piyohogeo/streamthumb/releases/tag/v0.1.0)
 from signed tag `v0.1.0`. The tag points to commit
 `ab1fc3e2efd6c1628130242df7941434eab7c4e8`, and GitHub reports its SSH
@@ -96,5 +102,5 @@ After the tag push, the same tagged revision passed explicitly dispatched
 [Fuzz](https://github.com/piyohogeo/streamthumb/actions/runs/31164749698),
 [Benchmarks](https://github.com/piyohogeo/streamthumb/actions/runs/31164751914),
 and [Release Candidate](https://github.com/piyohogeo/streamthumb/actions/runs/31164753915)
-workflows. No version 0.1.0 release action remains. npm and crates.io
-publication are deferred and require separate explicit authorization.
+workflows. That historical artifact is not reused for v0.2.0. npm and crates.io
+publication remain deferred and require separate explicit authorization.

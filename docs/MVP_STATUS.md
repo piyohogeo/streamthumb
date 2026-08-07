@@ -1,8 +1,9 @@
 # MVP implementation status
 
 This document maps the completion criteria in `STREAMTHUMB_DESIGN.md` to
-implementation and verification evidence. It describes version 0.1.0 as
-published through the project's GitHub-only release process on 2026-08-07.
+implementation and verification evidence. Version 0.1.0 was published through
+the project's GitHub-only release process on 2026-08-07. This document also
+tracks the additive browser-input and planning work in the v0.2.0 candidate.
 
 ## Completion matrix
 
@@ -19,6 +20,9 @@ published through the project's GitHub-only release process on 2026-08-07.
 | PNG encoder configuration | Complete | Rust, WebAssembly, and CLI APIs expose 8-bit color mode, compression, and filter settings. Tests verify IHDR color types, decoded pixels, every compression/filter combination, Adam7 input, defaults, and invalid boundary values. |
 | JPEG output | Complete | Rust, WebAssembly, and CLI APIs expose baseline sequential JPEG with quality, compositing background, and 4:2:0/4:2:2/4:4:4 controls. Independent decoding covers ordered and Adam7 inputs, multiple MCU rows, quality 100, and limits. |
 | Browser WebAssembly package | Complete | Chrome and Firefox run worker-based wasm-bindgen tests, including multi-chunk PNG/JPEG output and callback exception identity. A separately installed tarball consumer verifies multi-chunk output in headless Chrome. |
+| Browser `File` and `Blob` input | Complete | Dedicated workers use `FileReaderSync` and `Blob.slice()` through the synchronous seekable WebAssembly APIs. Chrome and Firefox verify slice parity, bounded reads, limits, callback failures, and PNG/JPEG/RGBA output without a complete encoded-input copy. |
+| Browser memory preflight | Complete | Slice and seekable planners return identical plain-object input metadata, output geometry, complete Rust-owned working-memory estimates, and typed configured-limit status without decoding pixels. |
+| GitHub Pages demo | Complete | The deployed worker uses seekable planning and execution for local `File` and generated sample `Blob` inputs. Chrome verifies 128 KiB preflight rejection, 4 MiB recovery, every output format, previews, downloads, revisioned runtime assets, and bounded range reads. |
 | Node.js and Deno package use | Complete | CI installs the tarball into an isolated consumer and runs the public examples with explicit WebAssembly bytes. |
 | Cloudflare Worker adapter | Source complete; runtime deferred | The runtime-neutral adapter and local package reference are checked. Live-account validation is intentionally excluded because no Cloudflare account is available. |
 | Memory and comparison benchmarks | Complete for current baselines | Reproducible native and WebAssembly measurements compare streamthumb with a full-frame image-rs baseline and pinned jSquash packages. Native runners also compare slice and seekable-reader input and require byte-identical PNG/JPEG output. |
@@ -30,6 +34,12 @@ Version 0.1.0 also supports Adam7, every standard PNG color type and legal bit
 depth, applicable palette/grayscale/RGB `tRNS` transparency, centered cover
 cropping, native `Read + Seek` input, raw RGBA output, strict TypeScript
 declarations, and reproducible release-candidate artifacts.
+
+The v0.2.0 candidate adds `planThumbnailPng`,
+`planThumbnailPngFromSeekable`, `thumbnailPngFromSeekable`, and
+`thumbnailPngFromSeekableToChunks`. Its Pages demo retains inputs as `File` or
+`Blob`, uses revisioned assets to prevent mixed-cache deployments, and exposes
+working-memory limits down to 128 KiB for preflight-failure demonstrations.
 
 ## Streaming output extension status
 
@@ -99,4 +109,5 @@ the owned-result API.
   those toolchains to the repository.
 - npm and crates.io publication remain deferred. Tags and GitHub Releases are
   explicit maintainer actions rather than CI operations; version 0.1.0 was
-  published from a verified signed tag through that manual process.
+  published from a verified signed tag, and v0.2.0 remains an unreleased
+  candidate until the same manual approval and verification process completes.

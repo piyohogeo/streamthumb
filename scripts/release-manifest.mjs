@@ -37,7 +37,10 @@ const artifactsDirectory = path.resolve(
 const artifactOnly = arguments_.includes("--artifact-only");
 
 function run(commandName, commandArguments = []) {
-  const result = spawnSync(commandName, commandArguments, {
+  const effectiveArguments = commandName === "git"
+    ? ["-c", `safe.directory=${root.replaceAll("\\", "/")}`, ...commandArguments]
+    : commandArguments;
+  const result = spawnSync(commandName, effectiveArguments, {
     cwd: root,
     encoding: "utf8",
   });

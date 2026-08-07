@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file. The
 project follows Semantic Versioning.
 
-## [Unreleased]
+## [0.2.0] - Unreleased
 
 ### Added
 

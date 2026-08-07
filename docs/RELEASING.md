@@ -2,7 +2,7 @@
 
 This project distributes the browser-targeted WebAssembly package as a verified
 GitHub Release artifact. Publishing `@streamthumb/wasm` to npm is an optional,
-separate maintainer action and is not part of the version 0.1.0 release plan.
+separate maintainer action and is not part of the GitHub-only release plan.
 Nothing is published automatically by CI.
 
 See [the release readiness audit](RELEASE_READINESS.md) for the current package,
@@ -74,7 +74,7 @@ decision and dependency-ordered publication plan.
 
 ## Optional npm publication
 
-Publishing is outside the version 0.1.0 GitHub-only release plan and requires a
+Publishing is outside the GitHub-only release plan and requires a
 new explicit maintainer decision. If that decision is made later, authenticate
 with an npm account that can publish the `@streamthumb` scope, then publish the
 already inspected tarball:

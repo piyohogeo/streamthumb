@@ -378,7 +378,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "streamthumb-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "streamthumb-core",
  "streamthumb-png",
@@ -386,11 +386,11 @@ dependencies = [
 
 [[package]]
 name = "streamthumb-core"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "streamthumb-encode"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "jpeg-decoder",
  "jpeg-encoder",
@@ -399,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "streamthumb-png"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "jpeg-decoder",
@@ -410,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "streamthumb-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "png",
