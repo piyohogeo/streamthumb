@@ -80,7 +80,9 @@ changes require the metadata audit to be repeated.
 
 ## Remaining maintainer actions
 
-Before publication, the maintainer must choose the final version and date,
-replace `Unreleased` in `CHANGELOG.md`, verify the pinned release-candidate
-artifact, and explicitly authorize signing, tagging, GitHub Release creation,
-and npm publication. No automated workflow performs those actions.
+Version 0.1.0 uses a GitHub-only release plan. The final version and date are
+recorded in `CHANGELOG.md`; the remaining actions are to verify the final pinned
+release-candidate artifact, sign and push `v0.1.0`, and create the GitHub Release
+from that exact artifact. npm and crates.io publication remain deferred and
+would require separate explicit authorization. No automated workflow performs
+those actions.

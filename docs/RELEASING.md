@@ -1,7 +1,9 @@
 # Release process
 
-This project publishes the browser-targeted WebAssembly package as
-`@streamthumb/wasm`. The package is not published automatically by CI.
+This project distributes the browser-targeted WebAssembly package as a verified
+GitHub Release artifact. Publishing `@streamthumb/wasm` to npm is an optional,
+separate maintainer action and is not part of the version 0.1.0 release plan.
+Nothing is published automatically by CI.
 
 See [the release readiness audit](RELEASE_READINESS.md) for the current package,
 dependency, license, and automated-gate inventory.
@@ -70,11 +72,12 @@ decision and dependency-ordered publication plan.
       --verify-tag --title "streamthumb X.Y.Z" --generate-notes
     ```
 
-## Publish to npm
+## Optional npm publication
 
-Publishing is an explicit maintainer action. Authenticate with an npm account
-that can publish the `@streamthumb` scope, then publish the already inspected
-tarball:
+Publishing is outside the version 0.1.0 GitHub-only release plan and requires a
+new explicit maintainer decision. If that decision is made later, authenticate
+with an npm account that can publish the `@streamthumb` scope, then publish the
+already inspected tarball:
 
 ```text
 npm publish target/npm-artifacts/streamthumb-wasm-X.Y.Z.tgz \
