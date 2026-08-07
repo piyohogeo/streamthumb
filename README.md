@@ -97,6 +97,9 @@ conservative Rust memory plan used by execution before generating PNG, JPEG,
 or raw RGBA output. The demo keeps input as a `File` or `Blob` and uses bounded
 synchronous range reads instead of complete JavaScript and WebAssembly input
 copies.
+The bundled demo sample is a highly compressible 2048 x 2048 RGBA PNG, and the
+demo working-memory limit starts at 4 MiB so the bounded-memory behavior is
+visible without changing the library's 32 MiB API default.
 
 Build a browser-targeted package with:
 

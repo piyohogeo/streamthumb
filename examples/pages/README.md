@@ -22,6 +22,6 @@ module workers and WebAssembly loading are not supported reliably from a
 `file:` URL. All production asset URLs are relative so the site works below
 the `/streamthumb/` GitHub Pages project path.
 
-The bundled smoke sample is copied from the PNG Suite fixture
-`fuzz/corpus/thumbnail_png/pngsuite_basn6a08.png`. Its license is copied into
-the generated `samples` directory and linked from `sample-manifest.json`.
+The bundled sample is generated deterministically as a highly compressible
+2048 x 2048 RGBA PNG. It provides large decoded dimensions without adding a
+large download to the static site.

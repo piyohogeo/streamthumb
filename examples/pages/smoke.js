@@ -67,8 +67,12 @@ async function verifyPageUi() {
   const doc = frame.contentDocument;
   const id = (value) => doc.getElementById(value);
   await waitFor(() => id("status").dataset.ready === "true", "Pages UI worker did not become ready.");
+  assert(doc.querySelector(".hero h1").textContent === "streamthumb / WebAssembly demo", "The compact demo title was not rendered.");
+  assert(id("drop-zone").textContent.includes("The image is never uploaded to a server."), "The drop zone omitted the privacy note.");
+  assert(id("max-memory").value === "4", "The UI memory limit did not default to 4 MiB.");
   id("sample-button").click();
   await waitFor(() => id("result-label").textContent === "READY", "Bundled sample was not inspected.");
+  assert(id("input-dimensions").textContent === "2048 × 2048", "The bundled sample did not expose large dimensions.");
 
   id("run-button").click();
   await waitFor(() => id("result-label").textContent === "SUCCESS", "Default PNG UI run did not succeed.");
@@ -91,7 +95,7 @@ async function verifyPageUi() {
   await waitFor(() => id("result-label").textContent === "FAILED", "The UI did not show the planned-memory rejection.");
   assert(id("error-detail").textContent.includes("Required (planned)") && id("error-detail").textContent.includes("Configured limit"), "The UI omitted typed memory-limit values.");
 
-  id("max-memory").value = "32";
+  id("max-memory").value = "4";
   id("run-button").click();
   await waitFor(() => id("result-label").textContent === "SUCCESS", "The UI did not recover after restoring the limit.");
   frame.remove();
@@ -118,9 +122,9 @@ async function report(result, message) {
 try {
   const ready = await waitForReady();
   assert(/^\d+\.\d+\.\d+/.test(ready.version), "Worker did not report a semantic version.");
-  const input = await fetch("./samples/pngsuite_basn6a08.png").then((response) => response.blob());
+  const input = await fetch("./samples/large-rgba.png").then((response) => response.blob());
 
-  const png = await run(input, { maxWidth: 16, maxHeight: 16, output: "png", maxMemoryBytes: 32 * 1024 * 1024 });
+  const png = await run(input, { maxWidth: 16, maxHeight: 16, output: "png", maxMemoryBytes: 4 * 1024 * 1024 });
   assert(png.type === "success", `PNG run failed: ${png.error}`);
   assert(png.plan.withinMemoryLimit, "PNG plan unexpectedly exceeded the memory limit.");
   assert(Number.isFinite(png.plan.memory.totalBytes) && png.plan.memory.totalBytes > 0, "PNG plan did not contain finite memory.");
@@ -134,15 +138,15 @@ try {
   assert(rejected.type === "failure" && rejected.stage === "configured limit rejection", "Low memory did not produce a typed rejection.");
   assert(rejected.required === png.plan.memory.totalBytes, "Typed rejection reported the wrong required memory.");
 
-  const jpeg = await run(input, { maxWidth: 16, maxHeight: 16, output: "jpeg", maxMemoryBytes: 32 * 1024 * 1024 });
+  const jpeg = await run(input, { maxWidth: 16, maxHeight: 16, output: "jpeg", maxMemoryBytes: 4 * 1024 * 1024 });
   assert(jpeg.type === "success", `JPEG run failed: ${jpeg.error}`);
   await assertImage(new Uint8Array(jpeg.bytes), jpeg.metadata.mimeType, 16, 16);
 
-  const rgba = await run(input, { maxWidth: 16, maxHeight: 16, output: "rgba", maxMemoryBytes: 32 * 1024 * 1024 });
+  const rgba = await run(input, { maxWidth: 16, maxHeight: 16, output: "rgba", maxMemoryBytes: 4 * 1024 * 1024 });
   assert(rgba.type === "success", `RGBA run failed: ${rgba.error}`);
   assert(rgba.bytes.byteLength === 16 * 16 * 4, "RGBA output length was incorrect.");
 
-  const recovered = await run(input, { maxWidth: 8, maxHeight: 8, output: "png", maxMemoryBytes: 32 * 1024 * 1024 });
+  const recovered = await run(input, { maxWidth: 8, maxHeight: 8, output: "png", maxMemoryBytes: 4 * 1024 * 1024 });
   assert(recovered.type === "success", "A valid run did not recover after the limit rejection.");
   await verifyPageUi();
   await report("pass", "PASS: Pages UI and seekable Blob worker verified bounded reads, PNG, JPEG, RGBA, planning, limit rejection, previews, and recovery");

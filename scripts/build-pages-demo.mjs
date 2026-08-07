@@ -2,6 +2,7 @@ import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { generatePagesSample } from "./generate-pages-sample.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const target = path.join(root, "target");
@@ -23,8 +24,7 @@ await mkdir(path.join(output, "samples"), { recursive: true });
 await Promise.all([
   copyFile(path.join(packageOutput, "streamthumb_wasm.js"), path.join(output, "vendor", "streamthumb_wasm.js")),
   copyFile(path.join(packageOutput, "streamthumb_wasm_bg.wasm"), path.join(output, "vendor", "streamthumb_wasm_bg.wasm")),
-  copyFile(path.join(root, "fuzz", "corpus", "thumbnail_png", "pngsuite_basn6a08.png"), path.join(output, "samples", "pngsuite_basn6a08.png")),
-  copyFile(path.join(root, "fuzz", "corpus", "PNG_SUITE_LICENSE.txt"), path.join(output, "samples", "PNG_SUITE_LICENSE.txt")),
+  generatePagesSample(path.join(output, "samples", "large-rgba.png")),
   writeFile(path.join(output, ".nojekyll"), ""),
 ]);
 
@@ -53,6 +53,15 @@ if (!Array.isArray(manifest.samples) || manifest.samples.length === 0) throw new
 for (const sample of manifest.samples) {
   if (typeof sample.path !== "string" || !sample.path.startsWith("./samples/")) throw new Error("Every sample must use a Pages-relative samples path.");
   await readFile(path.resolve(output, sample.path));
+}
+
+const sampleBytes = await readFile(path.join(output, "samples", "large-rgba.png"));
+if (sampleBytes.length >= 256 * 1024) throw new Error("The large RGBA sample must remain smaller than 256 KiB.");
+if (sampleBytes.readUInt32BE(16) !== 2048 || sampleBytes.readUInt32BE(20) !== 2048) {
+  throw new Error("The large RGBA sample must remain 2048 x 2048 pixels.");
+}
+if (sampleBytes[24] !== 8 || sampleBytes[25] !== 6) {
+  throw new Error("The large RGBA sample must remain an 8-bit RGBA PNG.");
 }
 
 console.log(`Built Pages demo for ${revision.slice(0, 12)} in ${path.relative(root, output)}`);

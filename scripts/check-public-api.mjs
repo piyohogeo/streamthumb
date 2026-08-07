@@ -137,6 +137,8 @@ requireText(browserWorker, "thumbnailPngToChunks", "examples/browser/worker.js")
 
 const pagesIndex = await source("examples/pages/index.html");
 for (const uiDefault of [
+  "<h1>streamthumb / WebAssembly demo</h1>",
+  "The image is never uploaded to a server.",
   'id="max-width" type="number" min="1" max="8192" value="512"',
   'id="max-height" type="number" min="1" max="8192" value="512"',
   'name="fit" value="contain" checked',
@@ -144,7 +146,7 @@ for (const uiDefault of [
   'id="png-color"',
   '<option value="rgba8" selected>',
   'id="jpeg-quality" type="number" min="1" max="100" value="85"',
-  'id="max-memory" type="number" min="1" max="256" value="32"',
+  'id="max-memory" type="number" min="1" max="256" value="4"',
   'id="max-input-bytes" type="number" min="1" value="67108864"',
   'id="max-input-width" type="number" min="1" value="100000"',
   'id="max-input-height" type="number" min="1" value="100000"',
@@ -154,6 +156,9 @@ for (const uiDefault of [
   'id="max-output-pixels" type="number" min="1" value="16777216"',
 ]) {
   requireText(pagesIndex, uiDefault, "examples/pages/index.html");
+}
+for (const removedHeroCopy of ["Make the thumbnail.", "Keep the image.", "hero__lead", "hero__note"]) {
+  if (pagesIndex.includes(removedHeroCopy)) throw new Error(`examples/pages/index.html retains removed hero copy: ${removedHeroCopy}`);
 }
 
 const pagesWorker = await source("examples/pages/worker.js");

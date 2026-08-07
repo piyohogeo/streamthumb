@@ -1385,3 +1385,10 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 2. The worker uses `FileReaderSync` and `Blob.slice()` to implement the synchronous exact-length range-reader contract. Inspection and configured-option planning call `planThumbnailPngFromSeekable`.
 3. Buffered RGBA execution calls `thumbnailPngFromSeekable`; encoded PNG and JPEG execution call `thumbnailPngFromSeekableToChunks`. Output assembly remains in JavaScript because previews and downloads require a complete output object.
 4. Pages smoke coverage supplies a real `Blob`, requires at least one range read, and verifies that no request exceeds the existing 8 KiB buffered-reader capacity. Static checks reject regression to the complete-input copying APIs in the Pages worker.
+
+### Phase 39 decisions
+
+1. The Pages hero is reduced to the single `streamthumb / WebAssembly demo` title and a compact readiness indicator. The upload privacy statement is placed inside the file drop target where it is relevant to the input action.
+2. The demo-specific working-memory limit defaults to 4 MiB while the WebAssembly API default remains 32 MiB. Reset behavior derives from the HTML defaults and returns the UI to 4 MiB.
+3. The bundled input is generated deterministically during the Pages build as a 2048 x 2048, 8-bit RGBA PNG with a repeated translucent tile pattern. The build rejects dimensions, color format, or encoded size at or above 256 KiB if they regress.
+4. Chrome smoke coverage verifies the exact compact title, privacy placement, 4 MiB initial value, large sample dimensions, and the existing output and recovery behavior.

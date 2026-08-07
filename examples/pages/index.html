@@ -7,21 +7,12 @@
       name="description"
       content="Create memory-bounded PNG and JPEG thumbnails locally in your browser with streamthumb WebAssembly."
     />
-    <title>streamthumb · local thumbnail lab</title>
+    <title>streamthumb / WebAssembly demo</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <header class="hero">
-      <div class="hero__eyebrow">streamthumb / WebAssembly demo</div>
-      <h1>Make the thumbnail.<br /><span>Keep the image.</span></h1>
-      <p class="hero__lead">
-        Your PNG is processed entirely inside this browser. The selected image
-        is never uploaded to a server.
-      </p>
-      <p class="hero__note">
-        Network requests only load this page, its WebAssembly module, and the
-        bundled sample. No analytics, ads, external CDN, or upload API is used.
-      </p>
+      <h1>streamthumb / WebAssembly demo</h1>
       <div class="hero__status" id="status" role="status" aria-live="polite">
         <span class="status-dot" aria-hidden="true"></span>
         <span id="status-text">Loading WebAssembly…</span>
@@ -38,6 +29,7 @@
           <span class="drop-zone__icon" aria-hidden="true">↗</span>
           <strong>Drop a PNG here</strong>
           <span>or choose a local file</span>
+          <small>The image is never uploaded to a server.</small>
           <input id="file-input" type="file" accept="image/png,.png" disabled />
         </label>
 
@@ -125,8 +117,8 @@
             <summary>Resource limits</summary>
             <p class="fine-print">These are processing limits passed directly to WebAssembly, not total browser-memory limits.</p>
             <div class="control-pair memory-control">
-              <label for="max-memory">Working memory limit <output id="max-memory-bytes">33,554,432 bytes</output></label>
-              <div class="range-number"><input id="max-memory-range" type="range" min="1" max="256" value="32" /><input id="max-memory" type="number" min="1" max="256" value="32" required /><span>MiB</span></div>
+              <label for="max-memory">Working memory limit <output id="max-memory-bytes">4,194,304 bytes</output></label>
+              <div class="range-number"><input id="max-memory-range" type="range" min="1" max="256" value="4" /><input id="max-memory" type="number" min="1" max="256" value="4" required /><span>MiB</span></div>
               <div class="presets" aria-label="Memory limit presets">
                 <button type="button" data-memory="4">4</button><button type="button" data-memory="8">8</button><button type="button" data-memory="16">16</button><button type="button" data-memory="32">32</button><button type="button" data-memory="64">64</button><button type="button" data-memory="128">128</button>
               </div>
