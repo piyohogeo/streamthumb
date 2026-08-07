@@ -3,7 +3,8 @@
 This package measures streamthumb without adding benchmark-only dependencies to
 the production workspace. It provides deterministic corpus generation, a
 full-frame image-rs comparison, native peak-RSS runners, and a WebAssembly
-linear-memory runner.
+linear-memory runner. A separately pinned jSquash adapter measures a composable
+browser-oriented PNG decode, resize, and encode pipeline.
 
 ## Corpus profiles
 
@@ -70,12 +71,42 @@ On Linux, use `./benchmarks/run-wasm.sh smoke 512`. The GitHub `Benchmarks`
 workflow exposes all three profiles as a manual action and uploads native and WASM
 JSON Lines files as workflow artifacts.
 
+## jSquash benchmark
+
+Windows PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\benchmarks\run-jsquash.ps1 -Profile smoke
+```
+
+Linux:
+
+```bash
+./benchmarks/run-jsquash.sh smoke 512
+```
+
+The adapter pins `@jsquash/png` 3.1.1 and `@jsquash/resize` 2.1.1 in the
+benchmark-only npm lockfile. Each case runs in a fresh Node.js process and
+performs PNG decode, Triangle resize, and PNG encode. Output dimensions use the
+same no-upscale contain calculation as streamthumb. Resize uses premultiplied
+alpha and encoded-sample-space values (`linearRGB: false`). jSquash does not
+provide streamthumb's exact area filter, so this is an end-to-end resource and
+runtime comparison rather than a pixel-equivalence test.
+
+The jSquash record reports the combined linear memory and binary size of the PNG
+and resize WebAssembly modules. JavaScript glue size is excluded from both
+jSquash and streamthumb binary-size fields. The manual GitHub workflow skips the
+`memory` profile for jSquash because its full-frame 16K decode belongs on a
+dedicated benchmark host with an explicit memory limit.
+
 ## Result schema
 
 Every record includes method, input name, encoded input size, source and output
 dimensions, elapsed milliseconds, and output size. Native records add
 `peak_rss_bytes`. WASM records add linear-memory before, high-water, and growth
-values plus Node RSS.
+values, WebAssembly binary bytes, Node RSS, and process maximum RSS. The
+jSquash record uses the same WASM and Node fields for direct schema-level
+comparison.
 
 Run multiple samples and summarize distributions before using these results for
 release claims. The checked-in report is an illustrative single-run baseline,

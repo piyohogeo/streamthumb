@@ -5,6 +5,13 @@ const { performance } = require("node:perf_hooks");
 
 function measureOne(packageDirectory, inputPath, maxDimensionText) {
   const streamthumb = require(path.resolve(packageDirectory));
+  const wasmBinaryBytes = fs
+    .readdirSync(packageDirectory)
+    .filter((name) => name.endsWith("_bg.wasm"))
+    .reduce(
+      (total, name) => total + fs.statSync(path.join(packageDirectory, name)).size,
+      0,
+    );
   const maxDimension = Number(maxDimensionText);
   const input = fs.readFileSync(inputPath);
   const memoryBefore = streamthumb.wasmMemoryBytes();
@@ -32,6 +39,8 @@ function measureOne(packageDirectory, inputPath, maxDimensionText) {
     wasm_memory_high_water_bytes: memoryAfter,
     wasm_memory_growth_bytes: memoryAfter - memoryBefore,
     node_rss_bytes: process.memoryUsage().rss,
+    node_max_rss_bytes: process.resourceUsage().maxRSS * 1024,
+    wasm_binary_bytes: wasmBinaryBytes,
   };
   result.free();
   process.stdout.write(`${JSON.stringify(record)}\n`);

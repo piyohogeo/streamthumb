@@ -57,6 +57,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: benchmarks/package-lock.json
       - run: cargo fmt --manifest-path benchmarks/Cargo.toml --check
       - run: cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
       - run: node --check benchmarks/run-wasm.cjs
+      - run: npm ci --prefix benchmarks
+      - run: npm run check --prefix benchmarks
+      - run: STREAMTHUMB_BENCHMARK_CHILD=1 node benchmarks/run-jsquash.mjs fuzz/corpus/thumbnail_png/pngsuite_basn6a08.png 8

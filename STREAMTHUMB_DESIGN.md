@@ -1172,3 +1172,12 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 2. The module Web Worker example includes a deterministic smoke page that loads a checked-in PNG fixture, generates a thumbnail in the worker, and decodes the returned PNG in the browser.
 3. GitHub Actions runs the Chrome and Firefox WebAssembly tests on every normal CI invocation. The existing compile-only WebAssembly job remains as a faster diagnostic boundary.
 4. Cloudflare Worker runtime validation is deferred because no deployment account is available. The adapter remains an architecture example but is explicitly outside the browser CI matrix.
+
+### Phase 15 decisions
+
+1. The first external WebAssembly comparison pins `@jsquash/png` 3.1.1 and `@jsquash/resize` 2.1.1 in a benchmark-only npm package and lockfile. These dependencies do not enter the production workspace.
+2. The jSquash adapter measures PNG decode, Triangle resize, and PNG encode in a fresh Node process per corpus case. Output dimensions use streamthumb's no-upscale contain calculation.
+3. jSquash resize uses premultiplied alpha and `linearRGB: false`. Because jSquash does not expose streamthumb's exact area filter, results compare end-to-end resources and runtime rather than pixel equivalence or image quality.
+4. jSquash linear memory is the sum of its PNG and resize WebAssembly memories. Binary size likewise sums the two `.wasm` artifacts while excluding JavaScript glue for both projects.
+5. The local smoke baseline records a 4.00 MiB streamthumb high-water versus 120.12 MiB for jSquash on a 2,048-square input. jSquash is faster in the same single run, so the report presents the result as a memory-versus-runtime tradeoff.
+6. Normal CI executes a small jSquash adapter smoke case. The manual benchmark workflow runs jSquash for smoke and Adam7 profiles but skips the 16K memory profile, which requires a dedicated host with an explicit memory limit.

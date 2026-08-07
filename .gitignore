@@ -8,4 +8,5 @@
 /benchmarks/target/
 /benchmarks/tmp/
 /benchmarks/wasm-pkg/
+/benchmarks/node_modules/
 **/*.rs.bk

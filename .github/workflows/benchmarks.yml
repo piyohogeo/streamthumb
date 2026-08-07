@@ -41,3 +41,20 @@ jobs:
         with:
           name: wasm-${{ inputs.profile }}
           path: benchmarks/results/wasm-${{ inputs.profile }}.jsonl
+
+  jsquash:
+    if: ${{ inputs.profile != 'memory' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: benchmarks/package-lock.json
+      - run: bash benchmarks/run-jsquash.sh "${{ inputs.profile }}" 512
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jsquash-${{ inputs.profile }}
+          path: benchmarks/results/jsquash-${{ inputs.profile }}.jsonl

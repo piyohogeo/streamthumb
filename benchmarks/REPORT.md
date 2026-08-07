@@ -2,14 +2,15 @@
 
 ## Scope
 
-This report is the first reproducible Phase 7 baseline. It compares the
-production streamthumb pipeline with a full-frame image-rs pipeline and records
-WebAssembly linear-memory high-water marks. All outputs use a maximum dimension
-of 512 pixels.
+This report is a reproducible Phase 7 baseline. It compares the production
+streamthumb pipeline with a full-frame image-rs native pipeline and a jSquash
+WebAssembly PNG decode, resize, and encode pipeline. All outputs use a maximum
+dimension of 512 pixels.
 
 The measurements below are a single smoke run on a Windows development machine
 using Rust 1.97.1, image 0.25.8, Node.js 24.14.1, and wasm-pack 0.15.0. They are
-illustrative and should not be treated as stable release thresholds.
+illustrative and should not be treated as stable release thresholds. The
+jSquash adapter pins `@jsquash/png` 3.1.1 and `@jsquash/resize` 2.1.1.
 
 ## Native results
 
@@ -29,17 +30,24 @@ with source width and output accumulator shape rather than source area; this can
 exceed a small full-frame allocation for a narrow source. The architecture is a
 predictable-memory tradeoff, not an unconditional win for every geometry.
 
-## WebAssembly results
+## WebAssembly comparison
 
-| Input | Runtime | Initial linear memory | High-water | Growth | Output |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 2,048 x 2,048 blank | 238.5 ms | 1.13 MiB | 4.00 MiB | 2.88 MiB | 2.1 KiB |
-| 64 x 8,192 noise | 42.7 ms | 1.13 MiB | 3.31 MiB | 2.19 MiB | 5.1 KiB |
-| 8,192 x 64 gradient | 42.5 ms | 1.13 MiB | 1.69 MiB | 0.56 MiB | 287 B |
+| Input | Method | Runtime | WASM high-water | WASM growth | Process max RSS | WASM binaries | Output |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2,048 x 2,048 blank | streamthumb | 332.9 ms | 4.00 MiB | 2.88 MiB | 62.9 MiB | 228.7 KiB | 2.1 KiB |
+| 2,048 x 2,048 blank | jSquash | 231.6 ms | 120.12 MiB | 118.00 MiB | 196.9 MiB | 210.6 KiB | 9.1 KiB |
+| 64 x 8,192 noise | streamthumb | 68.8 ms | 3.31 MiB | 2.19 MiB | 67.8 MiB | 228.7 KiB | 5.1 KiB |
+| 64 x 8,192 noise | jSquash | 57.6 ms | 17.00 MiB | 14.88 MiB | 77.9 MiB | 210.6 KiB | 5.8 KiB |
+| 8,192 x 64 gradient | streamthumb | 56.7 ms | 1.69 MiB | 0.56 MiB | 62.0 MiB | 228.7 KiB | 287 B |
+| 8,192 x 64 gradient | jSquash | 41.9 ms | 15.50 MiB | 13.38 MiB | 74.6 MiB | 210.6 KiB | 2.3 KiB |
 
-All smoke cases remained below the initial aspirational 32 MiB WASM target. A
-fresh Node process and WebAssembly instance were used for every row so retained
-pages from one case could not affect another case.
+All streamthumb smoke cases remained below the initial aspirational 32 MiB WASM
+target. In the square case, its linear-memory high-water was about 97% lower
+than jSquash's, while jSquash completed about 30% faster. The narrow and wide
+cases show the same architectural distinction at smaller scale: jSquash retains
+a decoded source frame, while streamthumb memory follows source-row and bounded
+output state. A fresh Node process and fresh WebAssembly instances were used for
+every row so retained pages from one case could not affect another case.
 
 ## Adam7 results
 
@@ -67,12 +75,17 @@ with output area rather than source area.
   coverage with premultiplied alpha. Output bytes and runtime are informative,
   but the filters are not pixel-equivalent.
 - Node RSS includes the JavaScript runtime and is kept in raw results rather
-  than compared with native RSS. WASM linear memory is the relevant bounded
-  allocation measure.
-- jSquash, wasm-image-optimization, and wasm-vips are not included in this first
-  baseline. Reproducible comparisons require pinned distributable artifacts and
-  equivalent codec/filter settings; they should be added as separate adapters
-  rather than production dependencies.
+  than compared with native RSS. Process maximum RSS is included for the two
+  Node-based pipelines, while WASM linear memory remains the more direct view of
+  codec and resizer allocation.
+- jSquash uses its Triangle filter with premultiplied alpha and
+  `linearRGB: false`; streamthumb uses exact integer area coverage. The outputs
+  are not pixel-equivalent, so runtime and output size must not be interpreted
+  as image-quality rankings.
+- The binary column includes only the WebAssembly files used by each adapter.
+  It excludes JavaScript glue, npm metadata, and runtime code.
+- wasm-image-optimization and wasm-vips remain future adapters. They should stay
+  benchmark-only dependencies with pinned distributable artifacts.
 - The memory corpus is provided but was not run for this local baseline. The
   16K image-rs comparison can require over one GiB and should run on a dedicated
   benchmark host with an explicit memory limit.
