@@ -80,6 +80,11 @@ the owned-result API.
 - APNG, JPEG input, WebP, AVIF, general transformations, additional filters,
   progressive JPEG, and an incremental JavaScript input API are not currently
   implemented.
+- The incremental-input spike proves that native seekable readers can decode
+  in small bounded reads. The selected PNG decoder's synchronous `BufRead +
+  Seek` contract cannot consume an asynchronous one-way JavaScript
+  `ReadableStream`; the browser API remains deferred pending a supported
+  push-to-row decoder path.
 - Resampling averages encoded color samples. It does not perform linear-light
   conversion or ICC color management, and encoded output does not inherit PNG
   color metadata.

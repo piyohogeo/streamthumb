@@ -12,6 +12,8 @@ project follows Semantic Versioning.
 - Failure-safe CLI destination replacement through same-directory staging.
 - Browser boundary coverage for multi-chunk PNG/JPEG output and callback exceptions.
 - Process-level CLI coverage for preserving existing output after encode failure.
+- An isolated incremental-input spike proving bounded native seekable reads and
+  documenting why JavaScript `ReadableStream` input remains deferred.
 - Memory-bounded PNG thumbnail generation for Rust and WebAssembly.
 - Static PNG support for all standard color types and legal bit depths,
   including Adam7 interlacing and applicable `tRNS` transparency.

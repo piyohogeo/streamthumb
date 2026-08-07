@@ -93,6 +93,10 @@ stores the unpublished tarball as the `npm-package` artifact.
 The same installed tarball is also exercised in Node.js and pinned Deno with
 explicit WebAssembly bytes, so the package remains free of runtime-specific
 filesystem dependencies.
+Input remains a complete `Uint8Array`. The [incremental-input feasibility
+report](docs/INCREMENTAL_INPUT_SPIKE.md) records the bounded native-reader spike
+and the decoder constraint that currently blocks a genuine asynchronous
+`ReadableStream` API.
 See [docs/RELEASING.md](docs/RELEASING.md) for the manual release process.
 The [release readiness audit](docs/RELEASE_READINESS.md) records the current
 package contents, dependency licenses, and remaining maintainer-only actions.

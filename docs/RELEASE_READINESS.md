@@ -9,7 +9,8 @@ create a release.
 
 - Normal CI checks formatting, clippy with warnings denied, 122 native tests,
   the wasm32 build, Chrome and Firefox tests, installed npm tarball consumers
-  in browsers, Node.js, and Deno, benchmark tooling, and all Rust packages.
+  in browsers, Node.js, and Deno, benchmark tooling, all Rust packages, and two
+  excluded incremental-input spike tests.
 - Scheduled and manually dispatched fuzzing covers row decoding, all thumbnail
   output codecs and fit modes, and ordered-versus-sparse area resampling.
 - The release-candidate workflow uses Rust 1.85.0, Node.js 24.14.1, npm 11.11.0,

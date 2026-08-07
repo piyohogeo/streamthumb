@@ -1313,3 +1313,12 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 7. A 2,048-square high-entropy local run measured 48.31 MiB buffered versus 16.13 MiB chunked WebAssembly high-water for PNG, and 24.00 versus 15.94 MiB for JPEG. The callback discarded chunks immediately; these are single-run architecture measurements rather than release thresholds.
 8. Browser boundary tests generate deterministic high-entropy input and require both PNG and JPEG to cross the 64 KiB boundary, preserve byte-for-byte equivalence, and propagate the exact JavaScript value thrown by a callback. The installed-tarball Chrome consumer independently exercises multi-chunk PNG output.
 9. A CLI process test supplies malformed input after creating an existing destination. It requires a failing exit status, unchanged destination bytes, and no remaining staging file. Lower-level writer tests inject final flush failure separately.
+
+### Phase 31 decisions
+
+1. The incremental-input investigation is isolated in `spikes/incremental-input`; it adds no production dependency or public API. Normal CI formats, lints, and tests the spike.
+2. `png 0.18.1` row decoding works incrementally but its high-level `Decoder` requires `BufRead + Seek`. A deterministic high-entropy test decodes all 256 rows through reads capped at 23 bytes and rejects an encoded-length limit before decoding.
+3. A native `Read + Seek` API is feasible without retaining the complete encoded input. Production work must replace direct input-slice `PLTE` and `tRNS` scans with validated `png::Info` metadata and decide whether to retain one decoder or rewind between bounded passes.
+4. The public low-level `png::StreamingDecoder` accepts pushed slices, but the high-level unfiltering driver depends on crate-private types. It cannot currently feed streamthumb's normalized row pipeline through a supported API.
+5. A JavaScript `ReadableStream` cannot satisfy the synchronous seekable-reader contract. An async wrapper that collects all chunks is explicitly rejected as false streaming, and a `SharedArrayBuffer` blocking bridge conflicts with project non-goals.
+6. WebAssembly incremental input remains deferred until a supported push-to-row decoder path exists. Any future API must prove bounded retained input, asynchronous backpressure, cancellation, and ordered/Adam7 parity.
