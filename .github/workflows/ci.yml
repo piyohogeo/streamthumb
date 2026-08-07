@@ -31,6 +31,26 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo check -p streamthumb-wasm --target wasm32-unknown-unknown
 
+  npm-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@wasm-pack
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: node scripts/build-npm-package.mjs
+      - run: node scripts/check-npm-package.mjs
+      - run: mkdir -p target/npm-artifacts && npm pack ./target/npm-package --pack-destination target/npm-artifacts
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-package
+          path: target/npm-artifacts/*.tgz
+          if-no-files-found: error
+
   browser:
     runs-on: ubuntu-latest
     steps:

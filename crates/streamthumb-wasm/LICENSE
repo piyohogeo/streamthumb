@@ -1,0 +1,8 @@
+streamthumb-wasm is licensed under either of the following licenses, at your
+option:
+
+- Apache License, Version 2.0: ../../LICENSE-APACHE
+- MIT License: ../../LICENSE-MIT
+
+The reproducible npm package build copies both complete license texts into the
+published package.

@@ -22,10 +22,16 @@ cargo run -p streamthumb-cli -- input.png output.png --max-width 512 --max-heigh
 Build a browser-targeted package with:
 
 ```text
-wasm-pack build crates/streamthumb-wasm --target web --out-dir ../../pkg
+node scripts/build-npm-package.mjs
+node scripts/check-npm-package.mjs
 ```
 
 The exported `thumbnailPng(inputBytes, options)` function works without DOM, Canvas, filesystem, threads, or `SharedArrayBuffer` APIs. See `examples/browser` and `examples/cloudflare-worker`.
+
+The generated package is prepared as `@streamthumb/wasm` in
+`target/npm-package`. Normal CI validates its metadata and exact tarball
+contents, then stores the unpublished tarball as the `npm-package` artifact.
+See [docs/RELEASING.md](docs/RELEASING.md) for the manual release process.
 
 ## Positioning
 

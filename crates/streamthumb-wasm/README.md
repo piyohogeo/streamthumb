@@ -5,8 +5,13 @@ WebAssembly bindings for the memory-bounded `streamthumb` PNG thumbnail pipeline
 ## Build
 
 ```text
-wasm-pack build --target web
+node scripts/build-npm-package.mjs
+node scripts/check-npm-package.mjs
 ```
+
+Run these commands from the repository root. They create the unpublished
+`@streamthumb/wasm` package in `target/npm-package` and verify the exact files
+that npm would include.
 
 ## API
 
@@ -39,4 +44,3 @@ const bytes = result.bytes;
 `output: "png"` returns encoded PNG bytes with MIME type `image/png`. `output: "rgba"` returns tightly packed, straight-alpha RGBA8 pixels with MIME type `application/octet-stream`.
 
 The API has no dependency on DOM, Canvas, filesystem, threads, `SharedArrayBuffer`, or Node-specific APIs. Passing and returning byte arrays currently copies them across the JavaScript/WebAssembly boundary.
-

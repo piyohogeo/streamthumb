@@ -1181,3 +1181,11 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. jSquash linear memory is the sum of its PNG and resize WebAssembly memories. Binary size likewise sums the two `.wasm` artifacts while excluding JavaScript glue for both projects.
 5. The local smoke baseline records a 4.00 MiB streamthumb high-water versus 120.12 MiB for jSquash on a 2,048-square input. jSquash is faster in the same single run, so the report presents the result as a memory-versus-runtime tradeoff.
 6. Normal CI executes a small jSquash adapter smoke case. The manual benchmark workflow runs jSquash for smoke and Adam7 profiles but skips the 16K memory profile, which requires a dedicated host with an explicit memory limit.
+
+### Phase 16 decisions
+
+1. The browser-targeted npm package is named `@streamthumb/wasm`, while the Rust crate remains `streamthumb-wasm`.
+2. A repository-owned Node script wraps `wasm-pack` so package naming, repository metadata, exports, public-scope configuration, and included license files are deterministic.
+3. Package validation runs `npm pack --dry-run --json`, enforces an exact file list, and rejects an unpacked package larger than 500,000 bytes.
+4. Normal CI rebuilds and validates the package, creates a tarball without publishing it, and uploads that tarball as the `npm-package` artifact.
+5. Publishing remains an explicit maintainer action after version, changelog, CI, artifact, and tag checks. CI does not receive an npm publishing token.
