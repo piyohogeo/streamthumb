@@ -12,7 +12,8 @@ use std::{
 use streamthumb_core::{Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
     JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngOptions,
-    thumbnail_jpeg_to_writer_with_options, thumbnail_png_to_writer_with_encoder_options,
+    thumbnail_jpeg_from_reader_to_writer_with_options,
+    thumbnail_png_from_reader_to_writer_with_encoder_options,
 };
 
 fn main() -> ExitCode {
@@ -36,21 +37,21 @@ fn run() -> Result<(), CliError> {
         )));
     }
 
-    let input = fs::read(&config.input)?;
+    let input = File::open(&config.input)?;
     let mut staged = StagedOutput::create(&config.output)?;
     let output = BufWriter::new(staged.take_file()?);
     match config.options.output {
         OutputFormat::Png => {
-            thumbnail_png_to_writer_with_encoder_options(
-                &input,
+            thumbnail_png_from_reader_to_writer_with_encoder_options(
+                input,
                 &config.options,
                 &config.png_options,
                 output,
             )?;
         }
         OutputFormat::Jpeg => {
-            thumbnail_jpeg_to_writer_with_options(
-                &input,
+            thumbnail_jpeg_from_reader_to_writer_with_options(
+                input,
                 &config.options,
                 &config.jpeg_options,
                 output,

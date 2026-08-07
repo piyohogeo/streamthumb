@@ -1,4 +1,4 @@
-use std::io::{Cursor, Write};
+use std::io::{BufReader, Cursor, Read, Seek, SeekFrom, Write};
 
 use png::{BitDepth, ColorType};
 use streamthumb_core::{
@@ -17,6 +17,104 @@ use crate::{
 enum EncodedOutputStorage {
     Buffered,
     Writer(usize),
+}
+
+struct SeekableInput<R> {
+    reader: BufReader<R>,
+    start: u64,
+    encoded_bytes: u64,
+}
+
+impl<R: Read + Seek> SeekableInput<R> {
+    fn new(reader: R, options: &ThumbnailOptions) -> Result<Self> {
+        let mut reader = BufReader::new(reader);
+        let start = reader.stream_position().map_err(Error::InputIo)?;
+        let end = reader.seek(SeekFrom::End(0)).map_err(Error::InputIo)?;
+        let encoded_bytes = end.checked_sub(start).ok_or_else(|| {
+            Error::InputIo(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "reader end precedes its starting position",
+            ))
+        })?;
+        reader
+            .seek(SeekFrom::Start(start))
+            .map_err(Error::InputIo)?;
+        validate_encoded_length(encoded_bytes, options)?;
+        Ok(Self {
+            reader,
+            start,
+            encoded_bytes,
+        })
+    }
+
+    fn rewind(&mut self) -> Result<&mut BufReader<R>> {
+        self.reader
+            .seek(SeekFrom::Start(self.start))
+            .map_err(Error::InputIo)?;
+        Ok(&mut self.reader)
+    }
+
+    fn raw_trns_length(&mut self) -> Result<Option<usize>> {
+        let start = self.start;
+        let end = start.checked_add(self.encoded_bytes).ok_or(
+            streamthumb_core::Error::IntegerOverflow {
+                operation: "encoded input end position",
+            },
+        )?;
+        let reader = self.rewind()?;
+        let mut signature = [0_u8; 8];
+        if let Err(error) = reader.read_exact(&mut signature) {
+            return map_metadata_io(error);
+        }
+        loop {
+            let position = reader.stream_position().map_err(Error::InputIo)?;
+            if position.checked_add(12).is_none_or(|minimum| minimum > end) {
+                return Ok(None);
+            }
+            let mut header = [0_u8; 8];
+            if let Err(error) = reader.read_exact(&mut header) {
+                return map_metadata_io(error);
+            }
+            let length = usize::try_from(u32::from_be_bytes([
+                header[0], header[1], header[2], header[3],
+            ]))
+            .map_err(|_| streamthumb_core::Error::IntegerOverflow {
+                operation: "PNG chunk length conversion",
+            })?;
+            let chunk_end = reader
+                .stream_position()
+                .map_err(Error::InputIo)?
+                .checked_add(u64::try_from(length).map_err(|_| {
+                    streamthumb_core::Error::IntegerOverflow {
+                        operation: "PNG chunk length conversion",
+                    }
+                })?)
+                .and_then(|position| position.checked_add(4));
+            let Some(chunk_end) = chunk_end else {
+                return Ok(None);
+            };
+            if chunk_end > end {
+                return Ok(None);
+            }
+            if &header[4..] == b"tRNS" {
+                return Ok(Some(length));
+            }
+            if &header[4..] == b"IDAT" {
+                return Ok(None);
+            }
+            reader
+                .seek(SeekFrom::Start(chunk_end))
+                .map_err(Error::InputIo)?;
+        }
+    }
+}
+
+fn map_metadata_io<T>(error: std::io::Error) -> Result<T> {
+    if error.kind() == std::io::ErrorKind::UnexpectedEof {
+        Err(Error::TruncatedInput)
+    } else {
+        Err(Error::InputIo(error))
+    }
 }
 
 /// A normalized 8-bit RGBA source row.
@@ -47,34 +145,47 @@ pub fn decode_png_rows<F>(
 where
     F: FnMut(RgbaRow<'_>) -> Result<()>,
 {
-    decode_png_rows_with_storage(input, options, EncodedOutputStorage::Buffered, consume_row)
+    decode_png_rows_from_reader(Cursor::new(input), options, consume_row)
 }
 
-fn decode_png_rows_with_storage<F>(
-    input: &[u8],
+/// Decodes a seekable PNG reader one row at a time and normalizes each row to RGBA8.
+///
+/// The reader is consumed from its current position and must support rewinding to
+/// that position. Encoded input bytes are not retained by this function.
+pub fn decode_png_rows_from_reader<R, F>(
+    reader: R,
+    options: &ThumbnailOptions,
+    consume_row: F,
+) -> Result<DecodedPngInfo>
+where
+    R: Read + Seek,
+    F: FnMut(RgbaRow<'_>) -> Result<()>,
+{
+    let mut input = SeekableInput::new(reader, options)?;
+    decode_png_rows_with_storage(
+        &mut input,
+        options,
+        EncodedOutputStorage::Buffered,
+        consume_row,
+    )
+}
+
+fn decode_png_rows_with_storage<R, F>(
+    input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     storage: EncodedOutputStorage,
     mut consume_row: F,
 ) -> Result<DecodedPngInfo>
 where
+    R: Read + Seek,
     F: FnMut(RgbaRow<'_>) -> Result<()>,
 {
-    let encoded_bytes =
-        u64::try_from(input.len()).map_err(|_| streamthumb_core::Error::IntegerOverflow {
-            operation: "encoded input length conversion",
-        })?;
-    if encoded_bytes > options.limits.max_input_bytes {
-        return Err(streamthumb_core::Error::LimitExceeded {
-            kind: streamthumb_core::LimitKind::InputBytes,
-            actual: encoded_bytes,
-            limit: options.limits.max_input_bytes,
-        }
-        .into());
-    }
+    let encoded_bytes = input.encoded_bytes;
+    let raw_trns_length = input.raw_trns_length()?;
 
     let decoder_limit = options.limits.max_working_memory_bytes;
     let mut decoder = png::Decoder::new_with_limits(
-        Cursor::new(input),
+        input.rewind()?,
         png::Limits {
             bytes: decoder_limit,
         },
@@ -89,7 +200,7 @@ where
     let dimensions = Dimensions::new(header.width, header.height)?;
     let source_color = header.color_type;
     validate_source_color_depth(source_color, header.bit_depth)?;
-    validate_direct_trns_chunk_length(input, source_color)?;
+    validate_direct_trns_length(raw_trns_length, source_color)?;
     reject_interlacing(header.interlaced)?;
     let source_bytes_per_pixel = planning_bytes_per_pixel(source_color, header.bit_depth)?;
     let input_info = InputInfo {
@@ -176,23 +287,41 @@ where
 
 /// Decodes and area-downsamples a supported PNG into a bounded RGBA8 image.
 pub fn thumbnail_png_rgba(input: &[u8], options: &ThumbnailOptions) -> Result<RgbaImage> {
+    thumbnail_png_rgba_from_reader(Cursor::new(input), options)
+}
+
+/// Decodes and area-downsamples a seekable PNG reader into bounded RGBA8 output.
+pub fn thumbnail_png_rgba_from_reader<R: Read + Seek>(
+    reader: R,
+    options: &ThumbnailOptions,
+) -> Result<RgbaImage> {
     let mut rgba_options = *options;
     rgba_options.output = OutputFormat::Rgba;
-    thumbnail_png_rgba_planned(input, &rgba_options).map(|(image, _)| image)
+    let mut input = SeekableInput::new(reader, &rgba_options)?;
+    thumbnail_png_rgba_planned(&mut input, &rgba_options).map(|(image, _)| image)
 }
 
 /// Creates a thumbnail using the output representation selected in `options`.
 pub fn thumbnail_png(input: &[u8], options: &ThumbnailOptions) -> Result<ThumbnailOutput> {
+    thumbnail_png_from_reader(Cursor::new(input), options)
+}
+
+/// Creates a thumbnail from a seekable PNG reader.
+pub fn thumbnail_png_from_reader<R: Read + Seek>(
+    reader: R,
+    options: &ThumbnailOptions,
+) -> Result<ThumbnailOutput> {
     match options.output {
         OutputFormat::Rgba => {
-            let (image, _) = thumbnail_png_rgba_planned(input, options)?;
+            let mut input = SeekableInput::new(reader, options)?;
+            let (image, _) = thumbnail_png_rgba_planned(&mut input, options)?;
             Ok(image.into())
         }
         OutputFormat::Png => {
-            thumbnail_png_with_encoder_options(input, options, &PngOptions::default())
+            thumbnail_png_from_reader_with_encoder_options(reader, options, &PngOptions::default())
         }
         OutputFormat::Jpeg => {
-            thumbnail_png_with_jpeg_options(input, options, &JpegOptions::default())
+            thumbnail_png_from_reader_with_jpeg_options(reader, options, &JpegOptions::default())
         }
     }
 }
@@ -205,10 +334,20 @@ pub fn thumbnail_png_with_encoder_options(
     options: &ThumbnailOptions,
     png_options: &PngOptions,
 ) -> Result<ThumbnailOutput> {
+    thumbnail_png_from_reader_with_encoder_options(Cursor::new(input), options, png_options)
+}
+
+/// Creates a PNG thumbnail from a seekable reader with codec-specific settings.
+pub fn thumbnail_png_from_reader_with_encoder_options<R: Read + Seek>(
+    reader: R,
+    options: &ThumbnailOptions,
+    png_options: &PngOptions,
+) -> Result<ThumbnailOutput> {
     if options.output != OutputFormat::Png {
         return Err(Error::InvalidPngOptions("PNG settings require PNG output"));
     }
-    let (bytes, plan) = thumbnail_png_encoded(input, options, *png_options)?;
+    let mut input = SeekableInput::new(reader, options)?;
+    let (bytes, plan) = thumbnail_png_encoded(&mut input, options, *png_options)?;
     Ok(ThumbnailOutput::Encoded {
         bytes,
         width: plan.output.width,
@@ -226,12 +365,22 @@ pub fn thumbnail_png_with_jpeg_options(
     options: &ThumbnailOptions,
     jpeg_options: &JpegOptions,
 ) -> Result<ThumbnailOutput> {
+    thumbnail_png_from_reader_with_jpeg_options(Cursor::new(input), options, jpeg_options)
+}
+
+/// Creates a JPEG thumbnail from a seekable reader with codec-specific settings.
+pub fn thumbnail_png_from_reader_with_jpeg_options<R: Read + Seek>(
+    reader: R,
+    options: &ThumbnailOptions,
+    jpeg_options: &JpegOptions,
+) -> Result<ThumbnailOutput> {
     if options.output != OutputFormat::Jpeg {
         return Err(Error::InvalidJpegOptions(
             "JPEG settings require JPEG output",
         ));
     }
-    let (bytes, plan) = thumbnail_jpeg_encoded(input, options, *jpeg_options)?;
+    let mut input = SeekableInput::new(reader, options)?;
+    let (bytes, plan) = thumbnail_jpeg_encoded(&mut input, options, *jpeg_options)?;
     Ok(ThumbnailOutput::Encoded {
         bytes,
         width: plan.output.width,
@@ -247,7 +396,25 @@ pub fn thumbnail_png_to_writer<W: Write + 'static>(
     options: &ThumbnailOptions,
     writer: W,
 ) -> Result<ThumbnailInfo> {
-    thumbnail_png_to_writer_with_encoder_options(input, options, &PngOptions::default(), writer)
+    thumbnail_png_from_reader_to_writer(Cursor::new(input), options, writer)
+}
+
+/// Writes a PNG thumbnail from a seekable reader with default PNG settings.
+pub fn thumbnail_png_from_reader_to_writer<R, W>(
+    reader: R,
+    options: &ThumbnailOptions,
+    writer: W,
+) -> Result<ThumbnailInfo>
+where
+    R: Read + Seek,
+    W: Write + 'static,
+{
+    thumbnail_png_from_reader_to_writer_with_encoder_options(
+        reader,
+        options,
+        &PngOptions::default(),
+        writer,
+    )
 }
 
 /// Writes an encoded PNG thumbnail directly to `writer`.
@@ -260,7 +427,32 @@ pub fn thumbnail_png_to_writer_with_encoder_options<W: Write + 'static>(
     png_options: &PngOptions,
     writer: W,
 ) -> Result<ThumbnailInfo> {
-    thumbnail_png_to_writer_with_encoder_options_and_buffer(input, options, png_options, 0, writer)
+    thumbnail_png_from_reader_to_writer_with_encoder_options(
+        Cursor::new(input),
+        options,
+        png_options,
+        writer,
+    )
+}
+
+/// Writes a PNG thumbnail from a seekable reader directly to `writer`.
+pub fn thumbnail_png_from_reader_to_writer_with_encoder_options<R, W>(
+    reader: R,
+    options: &ThumbnailOptions,
+    png_options: &PngOptions,
+    writer: W,
+) -> Result<ThumbnailInfo>
+where
+    R: Read + Seek,
+    W: Write + 'static,
+{
+    thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer(
+        reader,
+        options,
+        png_options,
+        0,
+        writer,
+    )
 }
 
 /// Writes PNG output through an adapter that retains a bounded chunk buffer.
@@ -272,11 +464,38 @@ pub fn thumbnail_png_to_writer_with_encoder_options_and_buffer<W: Write + 'stati
     writer_buffer_bytes: usize,
     writer: W,
 ) -> Result<ThumbnailInfo> {
+    thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer(
+        Cursor::new(input),
+        options,
+        png_options,
+        writer_buffer_bytes,
+        writer,
+    )
+}
+
+#[doc(hidden)]
+pub fn thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer<R, W>(
+    reader: R,
+    options: &ThumbnailOptions,
+    png_options: &PngOptions,
+    writer_buffer_bytes: usize,
+    writer: W,
+) -> Result<ThumbnailInfo>
+where
+    R: Read + Seek,
+    W: Write + 'static,
+{
     if options.output != OutputFormat::Png {
         return Err(Error::InvalidPngOptions("PNG settings require PNG output"));
     }
-    let plan =
-        thumbnail_png_encoded_to_writer(input, options, *png_options, writer_buffer_bytes, writer)?;
+    let mut input = SeekableInput::new(reader, options)?;
+    let plan = thumbnail_png_encoded_to_writer(
+        &mut input,
+        options,
+        *png_options,
+        writer_buffer_bytes,
+        writer,
+    )?;
     Ok(ThumbnailInfo {
         width: plan.output.width,
         height: plan.output.height,
@@ -290,7 +509,25 @@ pub fn thumbnail_jpeg_to_writer<W: Write>(
     options: &ThumbnailOptions,
     writer: W,
 ) -> Result<ThumbnailInfo> {
-    thumbnail_jpeg_to_writer_with_options(input, options, &JpegOptions::default(), writer)
+    thumbnail_jpeg_from_reader_to_writer(Cursor::new(input), options, writer)
+}
+
+/// Writes a JPEG thumbnail from a seekable reader with default settings.
+pub fn thumbnail_jpeg_from_reader_to_writer<R, W>(
+    reader: R,
+    options: &ThumbnailOptions,
+    writer: W,
+) -> Result<ThumbnailInfo>
+where
+    R: Read + Seek,
+    W: Write,
+{
+    thumbnail_jpeg_from_reader_to_writer_with_options(
+        reader,
+        options,
+        &JpegOptions::default(),
+        writer,
+    )
 }
 
 /// Writes an encoded JPEG thumbnail directly to `writer`.
@@ -303,7 +540,32 @@ pub fn thumbnail_jpeg_to_writer_with_options<W: Write>(
     jpeg_options: &JpegOptions,
     writer: W,
 ) -> Result<ThumbnailInfo> {
-    thumbnail_jpeg_to_writer_with_options_and_buffer(input, options, jpeg_options, 0, writer)
+    thumbnail_jpeg_from_reader_to_writer_with_options(
+        Cursor::new(input),
+        options,
+        jpeg_options,
+        writer,
+    )
+}
+
+/// Writes a JPEG thumbnail from a seekable reader directly to `writer`.
+pub fn thumbnail_jpeg_from_reader_to_writer_with_options<R, W>(
+    reader: R,
+    options: &ThumbnailOptions,
+    jpeg_options: &JpegOptions,
+    writer: W,
+) -> Result<ThumbnailInfo>
+where
+    R: Read + Seek,
+    W: Write,
+{
+    thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer(
+        reader,
+        options,
+        jpeg_options,
+        0,
+        writer,
+    )
 }
 
 /// Writes JPEG output through an adapter that retains a bounded chunk buffer.
@@ -315,13 +577,35 @@ pub fn thumbnail_jpeg_to_writer_with_options_and_buffer<W: Write>(
     writer_buffer_bytes: usize,
     writer: W,
 ) -> Result<ThumbnailInfo> {
+    thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer(
+        Cursor::new(input),
+        options,
+        jpeg_options,
+        writer_buffer_bytes,
+        writer,
+    )
+}
+
+#[doc(hidden)]
+pub fn thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer<R, W>(
+    reader: R,
+    options: &ThumbnailOptions,
+    jpeg_options: &JpegOptions,
+    writer_buffer_bytes: usize,
+    writer: W,
+) -> Result<ThumbnailInfo>
+where
+    R: Read + Seek,
+    W: Write,
+{
     if options.output != OutputFormat::Jpeg {
         return Err(Error::InvalidJpegOptions(
             "JPEG settings require JPEG output",
         ));
     }
+    let mut input = SeekableInput::new(reader, options)?;
     let plan = thumbnail_jpeg_encoded_to_writer(
-        input,
+        &mut input,
         options,
         *jpeg_options,
         writer_buffer_bytes,
@@ -334,8 +618,8 @@ pub fn thumbnail_jpeg_to_writer_with_options_and_buffer<W: Write>(
     })
 }
 
-fn thumbnail_jpeg_encoded_to_writer<W: Write>(
-    input: &[u8],
+fn thumbnail_jpeg_encoded_to_writer<R: Read + Seek, W: Write>(
+    input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     jpeg_options: JpegOptions,
     writer_buffer_bytes: usize,
@@ -395,8 +679,8 @@ fn thumbnail_jpeg_encoded_to_writer<W: Write>(
     Ok(decoded.plan)
 }
 
-fn thumbnail_png_encoded_to_writer<W: Write + 'static>(
-    input: &[u8],
+fn thumbnail_png_encoded_to_writer<R: Read + Seek, W: Write + 'static>(
+    input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     png_options: PngOptions,
     writer_buffer_bytes: usize,
@@ -459,8 +743,8 @@ fn thumbnail_png_encoded_to_writer<W: Write + 'static>(
     Ok(decoded.plan)
 }
 
-fn thumbnail_jpeg_encoded(
-    input: &[u8],
+fn thumbnail_jpeg_encoded<R: Read + Seek>(
+    input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     jpeg_options: JpegOptions,
 ) -> Result<(Vec<u8>, ProcessingPlan)> {
@@ -472,32 +756,33 @@ fn thumbnail_jpeg_encoded(
     }
 
     let mut downsampler: Option<AreaDownsampler<JpegRowSink>> = None;
-    let decoded = decode_png_rows(input, options, |row| {
-        if downsampler.is_none() {
-            let sink = JpegRowSink::new(
-                row.plan.output,
-                row.plan.encoded_output_limit_bytes,
-                jpeg_options,
-            )?;
-            downsampler = Some(AreaDownsampler::with_sink_and_fit(
-                row.plan.source,
-                row.plan.output,
-                options.fit,
-                sink,
-            )?);
-        }
-        let active = downsampler.as_mut().ok_or_else(|| {
-            Error::DecodeFailure("failed to initialize the JPEG row sink".to_owned())
+    let decoded =
+        decode_png_rows_with_storage(input, options, EncodedOutputStorage::Buffered, |row| {
+            if downsampler.is_none() {
+                let sink = JpegRowSink::new(
+                    row.plan.output,
+                    row.plan.encoded_output_limit_bytes,
+                    jpeg_options,
+                )?;
+                downsampler = Some(AreaDownsampler::with_sink_and_fit(
+                    row.plan.source,
+                    row.plan.output,
+                    options.fit,
+                    sink,
+                )?);
+            }
+            let active = downsampler.as_mut().ok_or_else(|| {
+                Error::DecodeFailure("failed to initialize the JPEG row sink".to_owned())
+            })?;
+            active.push_row(row.y, row.pixels)?;
+            Ok(())
         })?;
-        active.push_row(row.y, row.pixels)?;
-        Ok(())
-    })?;
     let bytes = downsampler.ok_or(Error::TruncatedInput)?.finish()?;
     Ok((bytes, decoded.plan))
 }
 
-fn thumbnail_png_encoded(
-    input: &[u8],
+fn thumbnail_png_encoded<R: Read + Seek>(
+    input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     png_options: PngOptions,
 ) -> Result<(Vec<u8>, ProcessingPlan)> {
@@ -515,33 +800,34 @@ fn thumbnail_png_encoded(
     }
 
     let mut downsampler: Option<AreaDownsampler<PngRowSink>> = None;
-    let decoded = decode_png_rows(input, options, |row| {
-        if downsampler.is_none() {
-            let sink = PngRowSink::new(
-                row.plan.output,
-                row.plan.encoded_output_limit_bytes,
-                color,
-                png_options,
-            )?;
-            downsampler = Some(AreaDownsampler::with_sink_and_fit(
-                row.plan.source,
-                row.plan.output,
-                options.fit,
-                sink,
-            )?);
-        }
-        let active = downsampler.as_mut().ok_or_else(|| {
-            Error::DecodeFailure("failed to initialize the PNG row sink".to_owned())
+    let decoded =
+        decode_png_rows_with_storage(input, options, EncodedOutputStorage::Buffered, |row| {
+            if downsampler.is_none() {
+                let sink = PngRowSink::new(
+                    row.plan.output,
+                    row.plan.encoded_output_limit_bytes,
+                    color,
+                    png_options,
+                )?;
+                downsampler = Some(AreaDownsampler::with_sink_and_fit(
+                    row.plan.source,
+                    row.plan.output,
+                    options.fit,
+                    sink,
+                )?);
+            }
+            let active = downsampler.as_mut().ok_or_else(|| {
+                Error::DecodeFailure("failed to initialize the PNG row sink".to_owned())
+            })?;
+            active.push_row(row.y, row.pixels)?;
+            Ok(())
         })?;
-        active.push_row(row.y, row.pixels)?;
-        Ok(())
-    })?;
     let bytes = downsampler.ok_or(Error::TruncatedInput)?.finish()?;
     Ok((bytes, decoded.plan))
 }
 
-fn thumbnail_png_rgba_planned(
-    input: &[u8],
+fn thumbnail_png_rgba_planned<R: Read + Seek>(
+    input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
 ) -> Result<(RgbaImage, ProcessingPlan)> {
     if png_is_interlaced(input, options)? {
@@ -549,20 +835,21 @@ fn thumbnail_png_rgba_planned(
     }
 
     let mut downsampler = None;
-    let decoded = decode_png_rows(input, options, |row| {
-        if downsampler.is_none() {
-            downsampler = Some(AreaDownsampler::new_with_fit(
-                row.plan.source,
-                row.plan.output,
-                options.fit,
-            )?);
-        }
-        let active = downsampler.as_mut().ok_or_else(|| {
-            Error::DecodeFailure("failed to initialize the area downsampler".to_owned())
+    let decoded =
+        decode_png_rows_with_storage(input, options, EncodedOutputStorage::Buffered, |row| {
+            if downsampler.is_none() {
+                downsampler = Some(AreaDownsampler::new_with_fit(
+                    row.plan.source,
+                    row.plan.output,
+                    options.fit,
+                )?);
+            }
+            let active = downsampler.as_mut().ok_or_else(|| {
+                Error::DecodeFailure("failed to initialize the area downsampler".to_owned())
+            })?;
+            active.push_row(row.y, row.pixels)?;
+            Ok(())
         })?;
-        active.push_row(row.y, row.pixels)?;
-        Ok(())
-    })?;
 
     let image = downsampler
         .ok_or(Error::TruncatedInput)?
@@ -571,7 +858,10 @@ fn thumbnail_png_rgba_planned(
     Ok((image, decoded.plan))
 }
 
-fn png_is_interlaced(input: &[u8], options: &ThumbnailOptions) -> Result<bool> {
+fn png_is_interlaced<R: Read + Seek>(
+    input: &mut SeekableInput<R>,
+    options: &ThumbnailOptions,
+) -> Result<bool> {
     inspect_png(input, options).map(|inspection| inspection.interlaced)
 }
 
@@ -581,25 +871,29 @@ struct PngInspection {
     auto_color: EncoderColor,
 }
 
-fn inspect_png(input: &[u8], options: &ThumbnailOptions) -> Result<PngInspection> {
-    checked_encoded_length(input, options)?;
+fn inspect_png<R: Read + Seek>(
+    input: &mut SeekableInput<R>,
+    options: &ThumbnailOptions,
+) -> Result<PngInspection> {
+    let raw_trns_length = input.raw_trns_length()?;
     let decoder_limit = options.limits.max_working_memory_bytes;
     let mut decoder = png::Decoder::new_with_limits(
-        Cursor::new(input),
+        input.rewind()?,
         png::Limits {
             bytes: decoder_limit,
         },
     );
     decoder.set_ignore_text_chunk(true);
     decoder.set_ignore_iccp_chunk(true);
-    let header = decoder
-        .read_header_info()
+    let reader = decoder
+        .read_info()
         .map_err(|error| map_decode_error(error, decoder_limit))?;
+    let header = reader.info();
     validate_source_color_depth(header.color_type, header.bit_depth)?;
-    validate_direct_trns_chunk_length(input, header.color_type)?;
+    validate_direct_trns_length(raw_trns_length, header.color_type)?;
     Ok(PngInspection {
         interlaced: header.interlaced,
-        auto_color: auto_encoder_color(input, header.color_type),
+        auto_color: auto_encoder_color(header),
     })
 }
 
@@ -613,9 +907,9 @@ const fn resolve_encoder_color(requested: PngColorMode, automatic: EncoderColor)
     }
 }
 
-fn auto_encoder_color(input: &[u8], color_type: ColorType) -> EncoderColor {
-    let transparency = find_chunk_data(input, b"tRNS");
-    match color_type {
+fn auto_encoder_color(info: &png::Info<'_>) -> EncoderColor {
+    let transparency = info.trns.as_deref();
+    match info.color_type {
         ColorType::Grayscale => {
             if transparency.is_some() {
                 EncoderColor::GrayscaleAlpha8
@@ -633,7 +927,7 @@ fn auto_encoder_color(input: &[u8], color_type: ColorType) -> EncoderColor {
         }
         ColorType::Rgba => EncoderColor::Rgba8,
         ColorType::Indexed => {
-            let grayscale = find_chunk_data(input, b"PLTE").is_some_and(|palette| {
+            let grayscale = info.palette.as_deref().is_some_and(|palette| {
                 !palette.is_empty()
                     && palette.len() % 3 == 0
                     && palette
@@ -652,59 +946,31 @@ fn auto_encoder_color(input: &[u8], color_type: ColorType) -> EncoderColor {
     }
 }
 
-fn find_chunk_data<'a>(input: &'a [u8], expected_type: &[u8; 4]) -> Option<&'a [u8]> {
-    let mut offset = 8_usize;
-    while offset.checked_add(12)? <= input.len() {
-        let length = usize::try_from(u32::from_be_bytes([
-            input[offset],
-            input[offset + 1],
-            input[offset + 2],
-            input[offset + 3],
-        ]))
-        .ok()?;
-        let chunk_type_start = offset.checked_add(4)?;
-        let data_start = chunk_type_start.checked_add(4)?;
-        let data_end = data_start.checked_add(length)?;
-        let chunk_end = data_end.checked_add(4)?;
-        if chunk_end > input.len() {
-            return None;
-        }
-        let chunk_type = &input[chunk_type_start..data_start];
-        if chunk_type == expected_type {
-            return Some(&input[data_start..data_end]);
-        }
-        if chunk_type == b"IDAT" {
-            return None;
-        }
-        offset = chunk_end;
-    }
-    None
-}
-
-fn thumbnail_png_adam7_rgba_planned(
-    input: &[u8],
+fn thumbnail_png_adam7_rgba_planned<R: Read + Seek>(
+    input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
 ) -> Result<(RgbaImage, ProcessingPlan)> {
     let (downsampler, plan) = thumbnail_png_adam7_downsampler(input, options)?;
     Ok((downsampler.finish()?, plan))
 }
 
-fn thumbnail_png_adam7_downsampler(
-    input: &[u8],
+fn thumbnail_png_adam7_downsampler<R: Read + Seek>(
+    input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
 ) -> Result<(SparseAreaDownsampler, ProcessingPlan)> {
     thumbnail_png_adam7_downsampler_with_storage(input, options, EncodedOutputStorage::Buffered)
 }
 
-fn thumbnail_png_adam7_downsampler_with_storage(
-    input: &[u8],
+fn thumbnail_png_adam7_downsampler_with_storage<R: Read + Seek>(
+    input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
     storage: EncodedOutputStorage,
 ) -> Result<(SparseAreaDownsampler, ProcessingPlan)> {
-    let encoded_bytes = checked_encoded_length(input, options)?;
+    let encoded_bytes = input.encoded_bytes;
+    let raw_trns_length = input.raw_trns_length()?;
     let decoder_limit = options.limits.max_working_memory_bytes;
     let mut decoder = png::Decoder::new_with_limits(
-        Cursor::new(input),
+        input.rewind()?,
         png::Limits {
             bytes: decoder_limit,
         },
@@ -719,7 +985,7 @@ fn thumbnail_png_adam7_downsampler_with_storage(
     let dimensions = Dimensions::new(header.width, header.height)?;
     let source_color = header.color_type;
     validate_source_color_depth(source_color, header.bit_depth)?;
-    validate_direct_trns_chunk_length(input, source_color)?;
+    validate_direct_trns_length(raw_trns_length, source_color)?;
     if !header.interlaced {
         return Err(Error::DecodeFailure(
             "Adam7 path received a non-interlaced PNG".to_owned(),
@@ -903,11 +1169,7 @@ fn pass_sample_count(length: u32, offset: u32, stride: u32) -> u32 {
     length.saturating_sub(offset).div_ceil(stride)
 }
 
-fn checked_encoded_length(input: &[u8], options: &ThumbnailOptions) -> Result<u64> {
-    let encoded_bytes =
-        u64::try_from(input.len()).map_err(|_| streamthumb_core::Error::IntegerOverflow {
-            operation: "encoded input length conversion",
-        })?;
+fn validate_encoded_length(encoded_bytes: u64, options: &ThumbnailOptions) -> Result<()> {
     if encoded_bytes > options.limits.max_input_bytes {
         return Err(streamthumb_core::Error::LimitExceeded {
             kind: streamthumb_core::LimitKind::InputBytes,
@@ -916,60 +1178,21 @@ fn checked_encoded_length(input: &[u8], options: &ThumbnailOptions) -> Result<u6
         }
         .into());
     }
-    Ok(encoded_bytes)
+    Ok(())
 }
 
-fn validate_direct_trns_chunk_length(input: &[u8], color: ColorType) -> Result<()> {
+fn validate_direct_trns_length(length: Option<usize>, color: ColorType) -> Result<()> {
     let expected = match color {
         ColorType::Grayscale => 2_usize,
         ColorType::Rgb => 6_usize,
         ColorType::GrayscaleAlpha | ColorType::Rgba | ColorType::Indexed => return Ok(()),
     };
-    let mut offset = 8_usize;
-    while offset
-        .checked_add(12)
-        .is_some_and(|minimum| minimum <= input.len())
-    {
-        let length = usize::try_from(u32::from_be_bytes([
-            input[offset],
-            input[offset + 1],
-            input[offset + 2],
-            input[offset + 3],
-        ]))
-        .map_err(|_| streamthumb_core::Error::IntegerOverflow {
-            operation: "PNG chunk length conversion",
-        })?;
-        let chunk_type_start =
-            offset
-                .checked_add(4)
-                .ok_or(streamthumb_core::Error::IntegerOverflow {
-                    operation: "PNG chunk type offset",
-                })?;
-        let data_start =
-            chunk_type_start
-                .checked_add(4)
-                .ok_or(streamthumb_core::Error::IntegerOverflow {
-                    operation: "PNG chunk data offset",
-                })?;
-        let Some(data_end) = data_start.checked_add(length) else {
-            return Ok(());
-        };
-        let Some(chunk_end) = data_end.checked_add(4) else {
-            return Ok(());
-        };
-        if chunk_end > input.len() {
-            return Ok(());
-        }
-        let chunk_type = &input[chunk_type_start..data_start];
-        if chunk_type == b"tRNS" && length != expected {
+    if let Some(length) = length {
+        if length != expected {
             return Err(Error::DecodeFailure(format!(
                 "direct-color tRNS has {length} bytes; expected {expected}"
             )));
         }
-        if chunk_type == b"IDAT" {
-            return Ok(());
-        }
-        offset = chunk_end;
     }
     Ok(())
 }
@@ -1519,6 +1742,7 @@ fn map_decode_error(error: png::DecodingError, decoder_limit: usize) -> Error {
         {
             Error::TruncatedInput
         }
+        png::DecodingError::IoError(io_error) => Error::InputIo(io_error),
         png::DecodingError::LimitsExceeded => Error::DecoderMemoryLimitExceeded {
             limit: decoder_limit,
         },
@@ -1532,12 +1756,83 @@ mod tests {
     use crate::{JpegSubsampling, PngCompression, PngFilter};
     use flate2::{Compression, write::ZlibEncoder};
     use png::Filter;
-    use std::io::Write;
+    use std::error::Error as _;
+    use std::io::{Read, Write};
     use std::sync::{Arc, Mutex};
     use streamthumb_core::{Error as CoreError, Fit, LimitKind};
 
     #[derive(Clone, Default)]
     struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    #[derive(Default)]
+    struct ReaderStats {
+        reads: usize,
+        max_read: usize,
+        seeks: usize,
+    }
+
+    struct ChunkedReader {
+        inner: Cursor<Vec<u8>>,
+        chunk_bytes: usize,
+        stats: Arc<Mutex<ReaderStats>>,
+    }
+
+    impl ChunkedReader {
+        fn new(bytes: Vec<u8>, chunk_bytes: usize) -> (Self, Arc<Mutex<ReaderStats>>) {
+            let stats = Arc::new(Mutex::new(ReaderStats::default()));
+            (
+                Self {
+                    inner: Cursor::new(bytes),
+                    chunk_bytes,
+                    stats: Arc::clone(&stats),
+                },
+                stats,
+            )
+        }
+    }
+
+    impl Read for ChunkedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let limit = buffer.len().min(self.chunk_bytes);
+            let read = self.inner.read(&mut buffer[..limit])?;
+            let mut stats = self.stats.lock().unwrap();
+            stats.reads += usize::from(read != 0);
+            stats.max_read = stats.max_read.max(read);
+            Ok(read)
+        }
+    }
+
+    impl Seek for ChunkedReader {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            self.stats.lock().unwrap().seeks += 1;
+            self.inner.seek(position)
+        }
+    }
+
+    struct ReadFailure {
+        position: u64,
+        length: u64,
+    }
+
+    impl Read for ReadFailure {
+        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected read failure",
+            ))
+        }
+    }
+
+    impl Seek for ReadFailure {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            self.position = match position {
+                SeekFrom::Start(position) => position,
+                SeekFrom::End(offset) => self.length.checked_add_signed(offset).unwrap(),
+                SeekFrom::Current(offset) => self.position.checked_add_signed(offset).unwrap(),
+            };
+            Ok(self.position)
+        }
+    }
 
     impl SharedWriter {
         fn bytes(&self) -> Vec<u8> {
@@ -3178,8 +3473,10 @@ mod tests {
                 output: OutputFormat::Png,
                 ..rgba_options
             };
+            let mut reader =
+                SeekableInput::new(Cursor::new(input.as_slice()), &png_options).unwrap();
             let (encoded, plan) =
-                thumbnail_png_encoded(input, &png_options, PngOptions::default()).unwrap();
+                thumbnail_png_encoded(&mut reader, &png_options, PngOptions::default()).unwrap();
             let actual = thumbnail_png_rgba(&encoded, &rgba_options).unwrap();
 
             assert_eq!(actual, expected);
@@ -3525,6 +3822,152 @@ mod tests {
 
         assert_eq!(callbacks, 1);
         assert!(matches!(error, Error::RowConsumer(_)));
+    }
+
+    #[test]
+    fn seekable_reader_apis_match_slice_apis_for_ordered_and_adam7_input() {
+        let width = 9;
+        let height = 7;
+        let pixels = (0..width * height * 4)
+            .map(|index| u8::try_from((index * 37) % 251).unwrap())
+            .collect::<Vec<_>>();
+        let ordered = encode_png(
+            width,
+            height,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::Paeth,
+            &pixels,
+        );
+        let adam7 = encode_adam7_png(width, height, ColorType::Rgba, &pixels);
+        let rgba_options = ThumbnailOptions {
+            max_width: 5,
+            max_height: 4,
+            output: OutputFormat::Rgba,
+            ..default_options()
+        };
+        let png_options = ThumbnailOptions {
+            output: OutputFormat::Png,
+            ..rgba_options
+        };
+        let jpeg_options = ThumbnailOptions {
+            output: OutputFormat::Jpeg,
+            ..rgba_options
+        };
+
+        for encoded in [ordered, adam7] {
+            assert_eq!(
+                thumbnail_png_rgba_from_reader(Cursor::new(encoded.as_slice()), &rgba_options)
+                    .unwrap(),
+                thumbnail_png_rgba(&encoded, &rgba_options).unwrap()
+            );
+            let mut prefixed = vec![91; 13];
+            prefixed.extend_from_slice(&encoded);
+            let mut prefixed_reader = Cursor::new(prefixed);
+            prefixed_reader.set_position(13);
+            assert_eq!(
+                thumbnail_png_rgba_from_reader(prefixed_reader, &rgba_options).unwrap(),
+                thumbnail_png_rgba(&encoded, &rgba_options).unwrap()
+            );
+
+            let ThumbnailOutput::Encoded {
+                bytes: expected, ..
+            } = thumbnail_png(&encoded, &png_options).unwrap()
+            else {
+                panic!("PNG options must produce encoded output");
+            };
+            let output = SharedWriter::default();
+            thumbnail_png_from_reader_to_writer(
+                Cursor::new(encoded.as_slice()),
+                &png_options,
+                output.clone(),
+            )
+            .unwrap();
+            assert_eq!(*output.0.lock().unwrap(), expected);
+
+            let expected = SharedWriter::default();
+            thumbnail_jpeg_to_writer(&encoded, &jpeg_options, expected.clone()).unwrap();
+            let actual = SharedWriter::default();
+            thumbnail_jpeg_from_reader_to_writer(
+                Cursor::new(encoded),
+                &jpeg_options,
+                actual.clone(),
+            )
+            .unwrap();
+            assert_eq!(*actual.0.lock().unwrap(), *expected.0.lock().unwrap());
+        }
+    }
+
+    #[test]
+    fn seekable_reader_decodes_through_small_bounded_chunks() {
+        let encoded = encode_png(
+            64,
+            64,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::Paeth,
+            &(0..64 * 64 * 4)
+                .map(|index| u8::try_from((index * 29) % 251).unwrap())
+                .collect::<Vec<_>>(),
+        );
+        let (reader, stats) = ChunkedReader::new(encoded, 7);
+
+        let image = thumbnail_png_rgba_from_reader(reader, &default_options()).unwrap();
+
+        assert_eq!(image.dimensions.width, 64);
+        let stats = stats.lock().unwrap();
+        assert!(stats.reads > 10);
+        assert!(stats.seeks >= 4);
+        assert!(stats.max_read <= 7);
+    }
+
+    #[test]
+    fn seekable_reader_rejects_input_limit_before_reading() {
+        let encoded = encode_png(
+            2,
+            2,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::NoFilter,
+            &[0; 16],
+        );
+        let mut options = default_options();
+        options.limits.max_input_bytes = u64::try_from(encoded.len() - 1).unwrap();
+        let (reader, stats) = ChunkedReader::new(encoded, 3);
+
+        let error = thumbnail_png_rgba_from_reader(reader, &options).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::Core(CoreError::LimitExceeded {
+                kind: LimitKind::InputBytes,
+                ..
+            })
+        ));
+        let stats = stats.lock().unwrap();
+        assert_eq!(stats.reads, 0);
+        assert_eq!(stats.seeks, 3);
+    }
+
+    #[test]
+    fn seekable_reader_preserves_input_io_errors() {
+        let error = thumbnail_png_rgba_from_reader(
+            ReadFailure {
+                position: 0,
+                length: 128,
+            },
+            &default_options(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, Error::InputIo(_)));
+        assert_eq!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
     }
 
     fn replace_ihdr_crc(png: &mut [u8]) {

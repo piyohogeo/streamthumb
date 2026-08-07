@@ -43,6 +43,14 @@ need an owned encoded buffer can use `thumbnail_png_to_writer` or
 `thumbnail_png_to_writer_with_encoder_options`. These APIs preserve the encoded
 byte cap while excluding the completed encoded image from working memory.
 
+Native callers can also avoid retaining the complete encoded input. The
+`*_from_reader` APIs accept `Read + Seek`, measure the remaining input from
+the reader's current position, enforce `max_input_bytes` before reading PNG
+data, and rewind between bounded metadata and decode passes. For example,
+`thumbnail_png_from_reader_to_writer_with_encoder_options` streams from a
+`File` directly to a writer. Slice APIs remain compatibility
+wrappers over `Cursor<&[u8]>`.
+
 CLI values match the WebAssembly literals: color accepts `auto`, `rgba8`,
 `rgb8`, `grayscale-alpha8`, or `grayscale8`; compression accepts `none`,
 `fastest`, `fast`, `balanced`, or `high`; and filter accepts `default`, `none`,
@@ -61,9 +69,10 @@ The Rust API exposes `JpegOptions` through
 supports 4:2:0, 4:2:2, and 4:4:4 subsampling. Direct native output uses
 `thumbnail_jpeg_to_writer` or `thumbnail_jpeg_to_writer_with_options`.
 
-The CLI uses the direct writer APIs for both codecs, so it writes encoded bytes
-to a same-directory staging file without retaining a second complete encoded
-copy. It replaces the destination only after encoding and flushing succeed.
+The CLI uses seekable-reader and direct-writer APIs for both codecs, so it does
+not retain either the complete encoded input or a second complete encoded
+output copy. It writes to a same-directory staging file and replaces the
+destination only after encoding and flushing succeed.
 Writer APIs take ownership of the writer and return `ThumbnailInfo`; existing
 buffer-returning APIs remain available.
 

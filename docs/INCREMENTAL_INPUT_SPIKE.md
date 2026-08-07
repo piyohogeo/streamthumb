@@ -2,9 +2,10 @@
 
 ## Scope
 
-This spike evaluates whether streamthumb can stop requiring a complete encoded
-PNG byte slice. It does not add a production API. The executable evidence lives
-in [`spikes/incremental-input`](../spikes/incremental-input).
+This spike evaluated whether streamthumb could stop requiring a complete
+encoded PNG byte slice. Its result has now been integrated into the production
+native API. The original executable evidence remains in
+[`spikes/incremental-input`](../spikes/incremental-input).
 
 ## Dependency contract
 
@@ -34,12 +35,16 @@ through reads capped at 23 bytes. It requires more than 1,000 non-empty reads,
 all 256 rows, exact encoded-length accounting, exact-limit acceptance, and a
 limit-minus-one rejection.
 
-Production integration still needs a focused refactor. The current
-`streamthumb-png` path scans the input slice directly for `PLTE` and `tRNS` and
-constructs separate decoders for inspection and image processing. `png::Info`
-already exposes owned palette and transparency data after `read_info`, so a
-reader API should replace direct slice scans with validated `Info` fields and
-either retain one decoder or explicitly rewind between bounded passes.
+Production integration accepts `Read + Seek`, enforces the encoded input
+limit before reading PNG data, and explicitly rewinds between bounded metadata
+and decode passes. Palette and transparency decisions use validated
+`png::Info`; a small allocation-free chunk walk preserves strict raw `tRNS`
+length validation before decoding. Ordered and Adam7 paths share the same
+seekable input abstraction.
+
+The native CLI now opens its source as `File` and sends output to the
+existing failure-safe staged writer. It therefore retains neither a complete
+encoded input vector nor a complete encoded output vector.
 
 ## Browser result
 
@@ -62,9 +67,9 @@ project does not require cross-origin isolation, shared memory, or threads.
 
 ## Decision
 
-Proceed later with a native `Read + Seek` API as an independent compatibility
-change. Do not expose `thumbnailPngFromStream` in WebAssembly yet. Keep the
-complete `Uint8Array` input copy documented until a supported push-to-row path
-exists. Any future JavaScript proposal must demonstrate bounded retained input,
-real asynchronous backpressure, callback cancellation, and parity for ordered
-and Adam7 images before becoming public.
+The native seekable-reader API is complete and the existing slice API remains a
+compatibility wrapper. Do not expose `thumbnailPngFromStream` in WebAssembly
+yet. Keep the complete `Uint8Array` input copy documented until a supported
+push-to-row path exists. Any future JavaScript proposal must demonstrate
+bounded retained input, real asynchronous backpressure, callback cancellation,
+and parity for ordered and Adam7 images before becoming public.

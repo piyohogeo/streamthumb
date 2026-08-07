@@ -32,11 +32,12 @@ pub struct MemoryEstimate {
 /// Estimates working memory without including encoded input storage.
 ///
 /// The decoder allowance includes three packed source rows and conservative
-/// staging space for DEFLATE history and buffered decompressed data. Accumulator
-/// constants reserve four premultiplied `u128` color channels plus one weight per
-/// output pixel. Raw RGBA output retains the full result. Buffered encoded
-/// output retains one completed RGBA row, codec state, and the bounded encoded
-/// result; direct writer plans exclude the caller-owned encoded destination.
+/// staging space for encoded input buffering, DEFLATE history, and buffered
+/// decompressed data. Accumulator constants reserve four premultiplied `u128`
+/// color channels plus one weight per output pixel. Raw RGBA output retains the
+/// full result. Buffered encoded output retains one completed RGBA row, codec
+/// state, and the bounded encoded result; direct writer plans exclude the
+/// caller-owned encoded destination.
 pub fn estimate_working_memory(
     source: Dimensions,
     output: Dimensions,

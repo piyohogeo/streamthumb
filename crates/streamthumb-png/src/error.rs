@@ -23,6 +23,7 @@ pub enum Error {
         detail: &'static str,
     },
     TruncatedInput,
+    InputIo(std::io::Error),
     DecoderMemoryLimitExceeded {
         limit: usize,
     },
@@ -47,6 +48,7 @@ impl fmt::Display for Error {
                 write!(formatter, "unsupported PNG {feature:?}: {detail}")
             }
             Self::TruncatedInput => formatter.write_str("truncated PNG input"),
+            Self::InputIo(error) => write!(formatter, "PNG input I/O failure: {error}"),
             Self::DecoderMemoryLimitExceeded { limit } => write!(
                 formatter,
                 "PNG decoder exceeded its {limit}-byte memory allowance"
@@ -74,6 +76,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Core(error) => Some(error),
+            Self::InputIo(error) => Some(error),
             _ => None,
         }
     }

@@ -7,9 +7,15 @@ mod options;
 mod output;
 
 pub use decoder::{
-    DecodedPngInfo, RgbaRow, decode_png_rows, thumbnail_jpeg_to_writer,
+    DecodedPngInfo, RgbaRow, decode_png_rows, decode_png_rows_from_reader,
+    thumbnail_jpeg_from_reader_to_writer, thumbnail_jpeg_from_reader_to_writer_with_options,
+    thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer, thumbnail_jpeg_to_writer,
     thumbnail_jpeg_to_writer_with_options, thumbnail_jpeg_to_writer_with_options_and_buffer,
-    thumbnail_png, thumbnail_png_rgba, thumbnail_png_to_writer,
+    thumbnail_png, thumbnail_png_from_reader, thumbnail_png_from_reader_to_writer,
+    thumbnail_png_from_reader_to_writer_with_encoder_options,
+    thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer,
+    thumbnail_png_from_reader_with_encoder_options, thumbnail_png_from_reader_with_jpeg_options,
+    thumbnail_png_rgba, thumbnail_png_rgba_from_reader, thumbnail_png_to_writer,
     thumbnail_png_to_writer_with_encoder_options,
     thumbnail_png_to_writer_with_encoder_options_and_buffer, thumbnail_png_with_encoder_options,
     thumbnail_png_with_jpeg_options,
