@@ -40,6 +40,8 @@ fn checked_input_length(value: f64) -> Result<u64, &'static str> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    #[cfg(test)]
+    use std::io::{self, Write};
     use std::{
         cell::RefCell,
         io::{Read, Seek, SeekFrom},
@@ -52,6 +54,9 @@ mod wasm {
     use wasm_bindgen::{JsCast, JsError, JsValue, prelude::wasm_bindgen};
 
     use super::{checked_input_length, checked_seek_position};
+
+    #[cfg(test)]
+    const OUTPUT_CHUNK_BYTES: usize = 64 * 1024;
 
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
     struct ReadStats {
@@ -69,6 +74,86 @@ mod wasm {
         read_at: Function,
         callback_error: Rc<RefCell<Option<JsValue>>>,
         stats: Rc<RefCell<ReadStats>>,
+    }
+
+    #[cfg(test)]
+    struct ChunkCallbackWriter<F> {
+        state: Rc<RefCell<ChunkCallbackState<F>>>,
+    }
+
+    #[cfg(test)]
+    struct ChunkCallbackState<F> {
+        buffer: Vec<u8>,
+        callback: F,
+    }
+
+    #[cfg(test)]
+    impl<F> Clone for ChunkCallbackWriter<F> {
+        fn clone(&self) -> Self {
+            Self {
+                state: Rc::clone(&self.state),
+            }
+        }
+    }
+
+    #[cfg(test)]
+    impl<F> ChunkCallbackWriter<F>
+    where
+        F: FnMut(&[u8]) -> io::Result<()>,
+    {
+        fn new(callback: F) -> io::Result<Self> {
+            let mut buffer = Vec::new();
+            buffer
+                .try_reserve_exact(OUTPUT_CHUNK_BYTES)
+                .map_err(|_| io::Error::other("could not allocate the output chunk buffer"))?;
+            Ok(Self {
+                state: Rc::new(RefCell::new(ChunkCallbackState { buffer, callback })),
+            })
+        }
+
+        fn finish(&self) -> io::Result<()> {
+            self.state.borrow_mut().emit()
+        }
+    }
+
+    #[cfg(test)]
+    impl<F> ChunkCallbackState<F>
+    where
+        F: FnMut(&[u8]) -> io::Result<()>,
+    {
+        fn emit(&mut self) -> io::Result<()> {
+            if self.buffer.is_empty() {
+                return Ok(());
+            }
+            (self.callback)(&self.buffer)?;
+            self.buffer.clear();
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    impl<F> Write for ChunkCallbackWriter<F>
+    where
+        F: FnMut(&[u8]) -> io::Result<()>,
+    {
+        fn write(&mut self, mut bytes: &[u8]) -> io::Result<usize> {
+            let original_len = bytes.len();
+            let mut state = self.state.borrow_mut();
+            while !bytes.is_empty() {
+                let available = OUTPUT_CHUNK_BYTES - state.buffer.len();
+                let take = available.min(bytes.len());
+                state.buffer.extend_from_slice(&bytes[..take]);
+                bytes = &bytes[take..];
+                if state.buffer.len() == OUTPUT_CHUNK_BYTES {
+                    state.emit()?;
+                }
+            }
+            Ok(original_len)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.finish()
+        }
     }
 
     impl JsSeekableReader {
@@ -270,21 +355,170 @@ mod wasm {
 
     #[cfg(test)]
     mod tests {
-        use std::io::{Read, Seek, SeekFrom};
+        use std::io::{Read, Seek, SeekFrom, Write};
 
+        use flate2::{Compression, write::ZlibEncoder};
         use js_sys::{Function, Object, Reflect, Uint8Array};
-        use streamthumb_core::ThumbnailOptions;
-        use streamthumb_png::thumbnail_png_rgba;
+        use streamthumb_core::{OutputFormat, ThumbnailOptions};
+        use streamthumb_png::{
+            JpegOptions, PngOptions, ThumbnailOutput,
+            thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer,
+            thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer,
+            thumbnail_png_from_reader_with_encoder_options,
+            thumbnail_png_from_reader_with_jpeg_options, thumbnail_png_rgba,
+            thumbnail_png_with_encoder_options, thumbnail_png_with_jpeg_options,
+        };
         use wasm_bindgen::{JsCast, JsValue};
         use wasm_bindgen_test::*;
 
-        use super::{JsSeekableReader, ReadStats, run_rgba};
+        use super::{
+            ChunkCallbackWriter, JsSeekableReader, OUTPUT_CHUNK_BYTES, ReadStats, run_rgba,
+        };
         use std::{cell::RefCell, rc::Rc};
 
         wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
         const RGBA_FIXTURE: &[u8] =
             include_bytes!("../../../fuzz/corpus/thumbnail_png/pngsuite_basn6a08.png");
+        const INVALID_SIGNATURE: &[u8] =
+            include_bytes!("../../../fuzz/corpus/thumbnail_png/invalid-signature");
+        const FIXTURES: &[(&str, &[u8])] = &[
+            (
+                "grayscale-8",
+                include_bytes!("../../../fuzz/corpus/thumbnail_png/pngsuite_basn0g08.png"),
+            ),
+            (
+                "rgb-8",
+                include_bytes!("../../../fuzz/corpus/thumbnail_png/pngsuite_basn2c08.png"),
+            ),
+            (
+                "rgb-16",
+                include_bytes!("../../../fuzz/corpus/thumbnail_png/pngsuite_basn2c16.png"),
+            ),
+            (
+                "palette-8",
+                include_bytes!("../../../fuzz/corpus/thumbnail_png/pngsuite_basn3p08.png"),
+            ),
+            (
+                "rgba-8",
+                include_bytes!("../../../fuzz/corpus/thumbnail_png/pngsuite_basn6a08.png"),
+            ),
+            (
+                "rgba-16",
+                include_bytes!("../../../fuzz/corpus/thumbnail_png/pngsuite_basn6a16.png"),
+            ),
+        ];
+        const ADAM7_PASSES: [(u32, u32, u32, u32); 7] = [
+            (0, 0, 8, 8),
+            (4, 0, 8, 8),
+            (0, 4, 4, 8),
+            (2, 0, 4, 4),
+            (0, 2, 2, 4),
+            (1, 0, 2, 2),
+            (0, 1, 1, 2),
+        ];
+
+        #[derive(Clone, Default)]
+        struct CapturingWriter {
+            bytes: Rc<RefCell<Vec<u8>>>,
+        }
+
+        impl CapturingWriter {
+            fn bytes(&self) -> Vec<u8> {
+                self.bytes.borrow().clone()
+            }
+        }
+
+        impl Write for CapturingWriter {
+            fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                self.bytes.borrow_mut().extend_from_slice(buffer);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        fn encoded_bytes(output: ThumbnailOutput) -> Vec<u8> {
+            match output {
+                ThumbnailOutput::Encoded { bytes, .. } => bytes,
+                ThumbnailOutput::Rgba { .. } => panic!("expected encoded thumbnail output"),
+                _ => panic!("unexpected thumbnail output variant"),
+            }
+        }
+
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = u32::MAX;
+            for byte in bytes {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    let mask = 0_u32.wrapping_sub(crc & 1);
+                    crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+                }
+            }
+            !crc
+        }
+
+        fn append_chunk(png: &mut Vec<u8>, chunk_type: [u8; 4], data: &[u8]) {
+            png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            png.extend_from_slice(&chunk_type);
+            png.extend_from_slice(data);
+            let start = png.len() - data.len() - chunk_type.len();
+            png.extend_from_slice(&crc32(&png[start..]).to_be_bytes());
+        }
+
+        fn pass_sample_count(extent: u32, offset: u32, stride: u32) -> u32 {
+            if extent <= offset {
+                0
+            } else {
+                (extent - offset).div_ceil(stride)
+            }
+        }
+
+        fn adam7_rgba_fixture() -> Vec<u8> {
+            const WIDTH: u32 = 17;
+            const HEIGHT: u32 = 13;
+            let mut pixels = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    pixels.extend_from_slice(&[
+                        (x * 13 + y * 3) as u8,
+                        (x * 5 + y * 17) as u8,
+                        (x * 19 + y * 7) as u8,
+                        255_u8.wrapping_sub((x * 9 + y * 11) as u8),
+                    ]);
+                }
+            }
+
+            let mut filtered = Vec::new();
+            for (x_offset, y_offset, x_stride, y_stride) in ADAM7_PASSES {
+                let samples = pass_sample_count(WIDTH, x_offset, x_stride);
+                let lines = pass_sample_count(HEIGHT, y_offset, y_stride);
+                for line in 0..lines {
+                    filtered.push(0);
+                    let y = y_offset + line * y_stride;
+                    for sample in 0..samples {
+                        let x = x_offset + sample * x_stride;
+                        let offset = ((y * WIDTH + x) * 4) as usize;
+                        filtered.extend_from_slice(&pixels[offset..offset + 4]);
+                    }
+                }
+            }
+
+            let mut compressor = ZlibEncoder::new(Vec::new(), Compression::default());
+            compressor.write_all(&filtered).unwrap();
+            let compressed = compressor.finish().unwrap();
+            let mut encoded = b"\x89PNG\r\n\x1a\n".to_vec();
+            let mut ihdr = Vec::with_capacity(13);
+            ihdr.extend_from_slice(&WIDTH.to_be_bytes());
+            ihdr.extend_from_slice(&HEIGHT.to_be_bytes());
+            ihdr.extend_from_slice(&[8, 6, 0, 0, 1]);
+            append_chunk(&mut encoded, *b"IHDR", &ihdr);
+            append_chunk(&mut encoded, *b"IDAT", &compressed);
+            append_chunk(&mut encoded, *b"IEND", &[]);
+            encoded
+        }
 
         fn blob_harness(input: &[u8]) -> (Function, Object) {
             let factory = Function::new_with_args(
@@ -360,6 +594,274 @@ mod wasm {
         }
 
         #[wasm_bindgen_test]
+        fn all_corpus_color_and_depth_fixtures_match_the_slice_rgba_path() {
+            let options = ThumbnailOptions::default();
+            for (name, input) in FIXTURES {
+                let expected = thumbnail_png_rgba(input, &options)
+                    .unwrap_or_else(|error| panic!("{name} slice decode failed: {error}"));
+                let (read_at, _) = blob_harness(input);
+                let actual = run_rgba(input.len() as f64, &read_at, &options)
+                    .unwrap_or_else(|error| panic!("{name} seekable decode failed: {error:?}"));
+                assert_eq!(actual.width, expected.dimensions.width, "{name} width");
+                assert_eq!(actual.height, expected.dimensions.height, "{name} height");
+                assert_eq!(actual.pixels, expected.pixels, "{name} pixels");
+                assert!(actual.stats.read_calls > 0, "{name} read calls");
+                assert!(actual.stats.largest_read <= 8 * 1024, "{name} largest read");
+            }
+        }
+
+        #[wasm_bindgen_test]
+        fn buffered_png_and_jpeg_outputs_match_the_slice_paths() {
+            for (name, input) in FIXTURES {
+                let mut options = ThumbnailOptions {
+                    output: OutputFormat::Png,
+                    ..ThumbnailOptions::default()
+                };
+                let expected =
+                    thumbnail_png_with_encoder_options(input, &options, &PngOptions::default())
+                        .unwrap_or_else(|error| panic!("{name} slice PNG failed: {error}"));
+                let (read_at, _) = blob_harness(input);
+                let reader = new_reader(input.len(), read_at);
+                let actual = thumbnail_png_from_reader_with_encoder_options(
+                    reader,
+                    &options,
+                    &PngOptions::default(),
+                )
+                .unwrap_or_else(|error| panic!("{name} seekable PNG failed: {error}"));
+                assert_eq!(actual, expected, "{name} PNG output");
+
+                options.output = OutputFormat::Jpeg;
+                let expected =
+                    thumbnail_png_with_jpeg_options(input, &options, &JpegOptions::default())
+                        .unwrap_or_else(|error| panic!("{name} slice JPEG failed: {error}"));
+                let (read_at, _) = blob_harness(input);
+                let reader = new_reader(input.len(), read_at);
+                let actual = thumbnail_png_from_reader_with_jpeg_options(
+                    reader,
+                    &options,
+                    &JpegOptions::default(),
+                )
+                .unwrap_or_else(|error| panic!("{name} seekable JPEG failed: {error}"));
+                assert_eq!(actual, expected, "{name} JPEG output");
+            }
+        }
+
+        #[wasm_bindgen_test]
+        fn adam7_rgba_png_and_jpeg_outputs_match_the_slice_paths() {
+            let input = adam7_rgba_fixture();
+            let rgba_options = ThumbnailOptions::default();
+            let expected = thumbnail_png_rgba(&input, &rgba_options).unwrap();
+            let (read_at, _) = blob_harness(&input);
+            let actual = run_rgba(input.len() as f64, &read_at, &rgba_options).unwrap();
+            assert_eq!(actual.width, expected.dimensions.width);
+            assert_eq!(actual.height, expected.dimensions.height);
+            assert_eq!(actual.pixels, expected.pixels);
+
+            let png_options = ThumbnailOptions {
+                output: OutputFormat::Png,
+                ..ThumbnailOptions::default()
+            };
+            let expected =
+                thumbnail_png_with_encoder_options(&input, &png_options, &PngOptions::default())
+                    .unwrap();
+            let (read_at, _) = blob_harness(&input);
+            let actual = thumbnail_png_from_reader_with_encoder_options(
+                new_reader(input.len(), read_at),
+                &png_options,
+                &PngOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(actual, expected);
+
+            let jpeg_options = ThumbnailOptions {
+                output: OutputFormat::Jpeg,
+                ..ThumbnailOptions::default()
+            };
+            let expected =
+                thumbnail_png_with_jpeg_options(&input, &jpeg_options, &JpegOptions::default())
+                    .unwrap();
+            let (read_at, _) = blob_harness(&input);
+            let actual = thumbnail_png_from_reader_with_jpeg_options(
+                new_reader(input.len(), read_at),
+                &jpeg_options,
+                &JpegOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(actual, expected);
+        }
+
+        #[wasm_bindgen_test]
+        fn direct_png_and_jpeg_writers_match_buffered_output() {
+            let adam7 = adam7_rgba_fixture();
+            for (name, input) in [("ordered", RGBA_FIXTURE), ("adam7", adam7.as_slice())] {
+                let png_options = ThumbnailOptions {
+                    output: OutputFormat::Png,
+                    ..ThumbnailOptions::default()
+                };
+                let expected = encoded_bytes(
+                    thumbnail_png_with_encoder_options(input, &png_options, &PngOptions::default())
+                        .unwrap(),
+                );
+                let (read_at, _) = blob_harness(input);
+                let writer = CapturingWriter::default();
+                let captured = writer.clone();
+                thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer(
+                    new_reader(input.len(), read_at),
+                    &png_options,
+                    &PngOptions::default(),
+                    OUTPUT_CHUNK_BYTES,
+                    writer,
+                )
+                .unwrap_or_else(|error| panic!("{name} seekable PNG writer failed: {error}"));
+                assert_eq!(captured.bytes(), expected, "{name} PNG writer output");
+
+                let jpeg_options = ThumbnailOptions {
+                    output: OutputFormat::Jpeg,
+                    ..ThumbnailOptions::default()
+                };
+                let expected = encoded_bytes(
+                    thumbnail_png_with_jpeg_options(input, &jpeg_options, &JpegOptions::default())
+                        .unwrap(),
+                );
+                let (read_at, _) = blob_harness(input);
+                let writer = CapturingWriter::default();
+                let captured = writer.clone();
+                thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer(
+                    new_reader(input.len(), read_at),
+                    &jpeg_options,
+                    &JpegOptions::default(),
+                    OUTPUT_CHUNK_BYTES,
+                    writer,
+                )
+                .unwrap_or_else(|error| panic!("{name} seekable JPEG writer failed: {error}"));
+                assert_eq!(captured.bytes(), expected, "{name} JPEG writer output");
+            }
+        }
+
+        #[wasm_bindgen_test]
+        fn chunked_png_and_jpeg_outputs_match_buffered_output() {
+            let adam7 = adam7_rgba_fixture();
+            for (name, input) in [("ordered", RGBA_FIXTURE), ("adam7", adam7.as_slice())] {
+                let png_options = ThumbnailOptions {
+                    output: OutputFormat::Png,
+                    ..ThumbnailOptions::default()
+                };
+                let expected = encoded_bytes(
+                    thumbnail_png_with_encoder_options(input, &png_options, &PngOptions::default())
+                        .unwrap(),
+                );
+                let chunks = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+                let writer = ChunkCallbackWriter::new({
+                    let chunks = Rc::clone(&chunks);
+                    move |chunk: &[u8]| {
+                        chunks.borrow_mut().push(chunk.to_vec());
+                        Ok(())
+                    }
+                })
+                .unwrap();
+                let finalizer = writer.clone();
+                let (read_at, _) = blob_harness(input);
+                thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer(
+                    new_reader(input.len(), read_at),
+                    &png_options,
+                    &PngOptions::default(),
+                    OUTPUT_CHUNK_BYTES,
+                    writer,
+                )
+                .unwrap_or_else(|error| panic!("{name} seekable chunked PNG failed: {error}"));
+                finalizer.finish().unwrap();
+                assert_eq!(chunks.borrow().concat(), expected, "{name} PNG chunks");
+                assert!(
+                    chunks
+                        .borrow()
+                        .iter()
+                        .all(|chunk| chunk.len() <= OUTPUT_CHUNK_BYTES)
+                );
+
+                let jpeg_options = ThumbnailOptions {
+                    output: OutputFormat::Jpeg,
+                    ..ThumbnailOptions::default()
+                };
+                let expected = encoded_bytes(
+                    thumbnail_png_with_jpeg_options(input, &jpeg_options, &JpegOptions::default())
+                        .unwrap(),
+                );
+                let chunks = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+                let writer = ChunkCallbackWriter::new({
+                    let chunks = Rc::clone(&chunks);
+                    move |chunk: &[u8]| {
+                        chunks.borrow_mut().push(chunk.to_vec());
+                        Ok(())
+                    }
+                })
+                .unwrap();
+                let finalizer = writer.clone();
+                let (read_at, _) = blob_harness(input);
+                thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer(
+                    new_reader(input.len(), read_at),
+                    &jpeg_options,
+                    &JpegOptions::default(),
+                    OUTPUT_CHUNK_BYTES,
+                    writer,
+                )
+                .unwrap_or_else(|error| panic!("{name} seekable chunked JPEG failed: {error}"));
+                finalizer.finish().unwrap();
+                assert_eq!(chunks.borrow().concat(), expected, "{name} JPEG chunks");
+                assert!(
+                    chunks
+                        .borrow()
+                        .iter()
+                        .all(|chunk| chunk.len() <= OUTPUT_CHUNK_BYTES)
+                );
+            }
+        }
+
+        #[wasm_bindgen_test]
+        fn output_callback_exception_is_preserved_by_identity() {
+            let factory = Function::new_no_args(
+                "const marker = { kind: 'write-failure' }; return { marker, onChunk() { throw marker; } };",
+            );
+            let harness = factory
+                .call0(&JsValue::UNDEFINED)
+                .unwrap()
+                .unchecked_into::<Object>();
+            let marker = Reflect::get(&harness, &JsValue::from_str("marker")).unwrap();
+            let on_chunk = Reflect::get(&harness, &JsValue::from_str("onChunk"))
+                .unwrap()
+                .unchecked_into::<Function>();
+            let callback_error = Rc::new(RefCell::new(None));
+            let writer = ChunkCallbackWriter::new({
+                let callback_error = Rc::clone(&callback_error);
+                move |chunk: &[u8]| {
+                    let bytes = Uint8Array::from(chunk);
+                    on_chunk
+                        .call1(&JsValue::UNDEFINED, bytes.as_ref())
+                        .map(|_| ())
+                        .map_err(|error| {
+                            *callback_error.borrow_mut() = Some(error);
+                            std::io::Error::other("JavaScript output callback failed")
+                        })
+                }
+            })
+            .unwrap();
+            let (read_at, _) = blob_harness(RGBA_FIXTURE);
+            let options = ThumbnailOptions {
+                output: OutputFormat::Png,
+                ..ThumbnailOptions::default()
+            };
+            let result = thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer(
+                new_reader(RGBA_FIXTURE.len(), read_at),
+                &options,
+                &PngOptions::default(),
+                OUTPUT_CHUNK_BYTES,
+                writer,
+            );
+            assert!(result.is_err());
+            let error = callback_error.borrow_mut().take().unwrap();
+            assert!(Object::is(&error, &marker));
+        }
+
+        #[wasm_bindgen_test]
         fn adapter_supports_checked_start_current_end_and_eof() {
             let (read_at, _) = blob_harness(&[10, 20, 30, 40, 50]);
             let mut reader = new_reader(5, read_at);
@@ -421,6 +923,35 @@ mod wasm {
             let mut reader = new_reader(16, short);
             let error = reader.read(&mut output).unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+
+            let long =
+                Function::new_with_args("offset, length", "return new Uint8Array(length + 1);");
+            let mut reader = new_reader(16, long);
+            let error = reader.read(&mut output).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+
+            let promise = Function::new_with_args(
+                "offset, length",
+                "return Promise.resolve(new Uint8Array(length));",
+            );
+            let mut reader = new_reader(16, promise);
+            let error = reader.read(&mut output).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        }
+
+        #[wasm_bindgen_test]
+        fn invalid_and_truncated_inputs_match_slice_diagnostics() {
+            let truncated = &RGBA_FIXTURE[..RGBA_FIXTURE.len() - 1];
+            for (name, input) in [
+                ("invalid signature", INVALID_SIGNATURE),
+                ("truncated PNG", truncated),
+            ] {
+                let options = ThumbnailOptions::default();
+                let expected = thumbnail_png_rgba(input, &options).unwrap_err().to_string();
+                let (read_at, _) = blob_harness(input);
+                let actual = run_rgba(input.len() as f64, &read_at, &options).unwrap_err();
+                assert_eq!(error_message(&actual), expected, "{name} diagnostic");
+            }
         }
     }
 }
