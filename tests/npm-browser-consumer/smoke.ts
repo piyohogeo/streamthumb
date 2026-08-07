@@ -1,6 +1,8 @@
 import init, {
   streamthumbVersion,
   thumbnailPng,
+  thumbnailPngToChunks,
+  type ThumbnailChunkCallback,
   type ThumbnailOptions,
   type ThumbnailOutputFormat,
   type PngColorMode,
@@ -29,6 +31,11 @@ async function finish(result: "pass" | "fail", message: string) {
 function hasPngSignature(bytes: Uint8Array) {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10];
   return signature.every((value, index) => bytes[index] === value);
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array) {
+  return left.length === right.length
+    && left.every((value, index) => value === right[index]);
 }
 
 const output: ThumbnailOutputFormat = "png";
@@ -76,10 +83,8 @@ try {
     throw new Error(`fixture request failed with HTTP ${response.status}`);
   }
 
-  const result = thumbnailPng(
-    new Uint8Array(await response.arrayBuffer()),
-    options,
-  );
+  const inputBytes = new Uint8Array(await response.arrayBuffer());
+  const result = thumbnailPng(inputBytes, options);
   const bytes = result.bytes;
 
   if (result.width !== 32 || result.height !== 32) {
@@ -98,10 +103,52 @@ try {
   if (decodedDimensions !== "32x32") {
     throw new Error(`decoded PNG is ${decodedDimensions}`);
   }
+  result.free();
+
+  const chunkOptions: ThumbnailOptions = {
+    maxWidth: 256,
+    maxHeight: 256,
+    allowUpscale: true,
+    output: "png",
+    png: { color: "rgba8", compression: "none", filter: "none" },
+    maxMemoryBytes: 32 * 1024 * 1024,
+  };
+  const expectedResult = thumbnailPng(inputBytes, chunkOptions);
+  const expectedBytes = expectedResult.bytes;
+  expectedResult.free();
+  const chunks: Uint8Array[] = [];
+  const onChunk: ThumbnailChunkCallback = (chunk) => chunks.push(chunk);
+  const chunkedResult = thumbnailPngToChunks(inputBytes, onChunk, chunkOptions);
+  if (chunks.length <= 1 || chunks.some((chunk) => chunk.length > 64 * 1024)) {
+    throw new Error("chunked PNG did not produce multiple bounded chunks");
+  }
+  const joined = new Uint8Array(chunkedResult.bytesWritten);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.length;
+  }
+  if (
+    chunkedResult.chunkCount !== chunks.length
+    || !equalBytes(joined, expectedBytes)
+  ) {
+    throw new Error("chunked PNG differs from buffered output");
+  }
+  chunkedResult.free();
+
+  const sentinel = { source: "chunk callback" };
+  try {
+    thumbnailPngToChunks(inputBytes, () => { throw sentinel; }, chunkOptions);
+    throw new Error("throwing chunk callback unexpectedly succeeded");
+  } catch (error) {
+    if (error !== sentinel) {
+      throw new Error("chunk callback exception identity was not preserved");
+    }
+  }
 
   await finish(
     "pass",
-    `PASS: @streamthumb/wasm ${streamthumbVersion()} created and decoded a 32x32 PNG`,
+    `PASS: @streamthumb/wasm ${streamthumbVersion()} verified buffered and multi-chunk PNG output`,
   );
 } catch (error) {
   await finish("fail", `FAIL: ${error instanceof Error ? error.stack : error}`);

@@ -413,6 +413,7 @@ name = "streamthumb-wasm"
 version = "0.1.0"
 dependencies = [
  "js-sys",
+ "png",
  "streamthumb-core",
  "streamthumb-png",
  "wasm-bindgen",

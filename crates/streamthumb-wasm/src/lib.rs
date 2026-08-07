@@ -739,6 +739,63 @@ mod browser_tests {
         options
     }
 
+    fn high_entropy_png() -> Vec<u8> {
+        const DIMENSION: u32 = 256;
+        let mut state = 0x6d2b_79f5_u32;
+        let mut pixels = Vec::with_capacity((DIMENSION * DIMENSION * 3) as usize);
+        for _ in 0..DIMENSION * DIMENSION * 3 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            pixels.push(state as u8);
+        }
+
+        let mut input = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut input, DIMENSION, DIMENSION);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_compression(png::Compression::Fast);
+            let mut writer = encoder.write_header().expect("PNG header must encode");
+            writer
+                .write_image_data(&pixels)
+                .expect("PNG pixels must encode");
+        }
+        input
+    }
+
+    fn large_output_options(format: OutputFormat) -> Object {
+        let options = options_with("output", &JsValue::from_str(output_format_name(format)));
+        if format == OutputFormat::Png {
+            let png = Object::new();
+            Reflect::set(
+                png.as_ref(),
+                &JsValue::from_str("compression"),
+                &JsValue::from_str("none"),
+            )
+            .expect("the PNG options object must be writable");
+            Reflect::set(options.as_ref(), &JsValue::from_str("png"), png.as_ref())
+                .expect("the thumbnail options object must be writable");
+        } else {
+            let jpeg = Object::new();
+            Reflect::set(
+                jpeg.as_ref(),
+                &JsValue::from_str("quality"),
+                &JsValue::from_f64(100.0),
+            )
+            .expect("the JPEG options object must be writable");
+            Reflect::set(
+                jpeg.as_ref(),
+                &JsValue::from_str("subsampling"),
+                &JsValue::from_str("444"),
+            )
+            .expect("the JPEG options object must be writable");
+            Reflect::set(options.as_ref(), &JsValue::from_str("jpeg"), jpeg.as_ref())
+                .expect("the thumbnail options object must be writable");
+        }
+        options
+    }
+
     #[wasm_bindgen_test]
     fn creates_a_png_thumbnail_in_a_dedicated_worker() {
         let options = Object::new();
@@ -871,9 +928,49 @@ mod browser_tests {
     }
 
     #[wasm_bindgen_test]
+    fn chunk_callback_delivers_multiple_bounded_png_and_jpeg_chunks() {
+        let input = high_entropy_png();
+        for format in [OutputFormat::Png, OutputFormat::Jpeg] {
+            let options = large_output_options(format);
+            let expected = thumbnail_png(&input, options.as_ref())
+                .expect("buffered thumbnail must succeed")
+                .bytes();
+            let chunks = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+            let target = Rc::clone(&chunks);
+            let callback: Closure<dyn FnMut(Uint8Array)> =
+                Closure::new(move |chunk: Uint8Array| {
+                    target.borrow_mut().push(chunk.to_vec());
+                });
+
+            let result = thumbnail_png_to_chunks(
+                &input,
+                callback.as_ref().unchecked_ref(),
+                options.as_ref(),
+            )
+            .expect("chunked thumbnail must succeed");
+            let chunks = chunks.borrow();
+            assert!(chunks.len() > 1, "output must cross the chunk boundary");
+            assert!(chunks.iter().all(|chunk| chunk.len() <= OUTPUT_CHUNK_BYTES));
+            assert_eq!(chunks.concat(), expected);
+            assert_eq!(result.bytes_written(), expected.len() as f64);
+            assert_eq!(result.chunk_count(), chunks.len() as u32);
+        }
+    }
+
+    #[wasm_bindgen_test]
     fn chunk_callback_errors_and_raw_output_are_rejected() {
-        let throwing = Function::new_no_args("throw new Error('injected chunk callback failure')");
-        assert!(thumbnail_png_to_chunks(PNG_INPUT, &throwing, &JsValue::NULL).is_err());
+        let sentinel = Object::new();
+        let factory = Function::new_with_args("sentinel", "return () => { throw sentinel; };");
+        let throwing = factory
+            .call1(&JsValue::UNDEFINED, sentinel.as_ref())
+            .expect("the callback factory must succeed")
+            .dyn_into::<Function>()
+            .expect("the callback factory must return a function");
+        let error = match thumbnail_png_to_chunks(PNG_INPUT, &throwing, &JsValue::NULL) {
+            Ok(_) => panic!("the callback exception must abort encoding"),
+            Err(error) => error,
+        };
+        assert!(Object::is(&error, sentinel.as_ref()));
 
         let rgba = options_with("output", &JsValue::from_str("rgba"));
         let noop = Function::new_no_args("");

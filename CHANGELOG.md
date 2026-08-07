@@ -10,6 +10,8 @@ project follows Semantic Versioning.
 - Bounded direct-to-writer PNG and JPEG APIs used by CLI file output.
 - Synchronous WebAssembly chunk callbacks for bounded PNG and JPEG delivery.
 - Failure-safe CLI destination replacement through same-directory staging.
+- Browser boundary coverage for multi-chunk PNG/JPEG output and callback exceptions.
+- Process-level CLI coverage for preserving existing output after encode failure.
 - Memory-bounded PNG thumbnail generation for Rust and WebAssembly.
 - Static PNG support for all standard color types and legal bit depths,
   including Adam7 interlacing and applicable `tRNS` transparency.

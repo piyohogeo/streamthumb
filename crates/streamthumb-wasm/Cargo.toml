@@ -17,6 +17,7 @@ streamthumb-png = { version = "0.1.0", path = "../streamthumb-png" }
 wasm-bindgen = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+png = "0.18.1"
 wasm-bindgen-test = "0.3"
 
 [lints]

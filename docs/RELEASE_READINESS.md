@@ -7,7 +7,7 @@ create a release.
 
 ## Automated gates
 
-- Normal CI checks formatting, clippy with warnings denied, 121 native tests,
+- Normal CI checks formatting, clippy with warnings denied, 122 native tests,
   the wasm32 build, Chrome and Firefox tests, installed npm tarball consumers
   in browsers, Node.js, and Deno, benchmark tooling, and all Rust packages.
 - Scheduled and manually dispatched fuzzing covers row decoding, all thumbnail
@@ -55,6 +55,12 @@ release-candidate build measured 532,213 unpacked bytes after the chunk-output
 API was added, so package inspection enforces a 550,000-byte ceiling. These
 values are descriptive; the pinned release-candidate manifest is authoritative
 for any future release.
+
+Adding high-entropy multi-chunk browser tests and the CLI process test did not
+change the release WebAssembly binary: the local optimized file remained
+444,752 bytes with SHA-256
+`6b1070dfa2ec6ae647b726f556f627f2c9aec3fe594230dfd0d6fc8d4ecc8ccb`, and
+the local packed and unpacked npm sizes remained unchanged.
 
 ## License and dependency audit
 
