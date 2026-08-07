@@ -21,6 +21,7 @@ const optionDefaults = [
   ["filter", "`\"area\"`"],
   ["allowUpscale", "`false`"],
   ["output", "`\"png\"`"],
+  ["png", "RGBA8, balanced compression, default filter"],
   ["maxInputBytes", "`67,108,864` (64 MiB)"],
   ["maxInputWidth", "`100,000`"],
   ["maxInputHeight", "`100,000`"],
@@ -69,6 +70,19 @@ for (const implementationDefault of [
   "max_working_memory_bytes: 32 * 1024 * 1024",
 ]) {
   requireText(limits, implementationDefault, "crates/streamthumb-core/src/limits.rs");
+}
+
+const pngOptions = await source("crates/streamthumb-png/src/options.rs");
+for (const implementationDefault of [
+  "color: PngColorMode::Rgba8",
+  "compression: PngCompression::Balanced",
+  "filter: PngFilter::Default",
+]) {
+  requireText(
+    pngOptions,
+    implementationDefault,
+    "crates/streamthumb-png/src/options.rs",
+  );
 }
 
 const publicExampleFiles = [

@@ -22,6 +22,11 @@ const result = thumbnailPng(inputBytes, {
   filter: "area",
   allowUpscale: false,
   output: "png",
+  png: {
+    color: "auto",
+    compression: "balanced",
+    filter: "default",
+  },
   maxInputBytes: 64 * 1024 * 1024,
   maxInputWidth: 100_000,
   maxInputHeight: 100_000,
@@ -44,9 +49,12 @@ encoded sample space. The package does not perform linear-light conversion or
 ICC color management, and encoded output does not inherit source PNG color
 metadata.
 
-The package exports `ThumbnailOptions`, `ThumbnailFit`, `ThumbnailFilter`, and
-`ThumbnailOutputFormat` TypeScript types. Every option is optional, and
-`thumbnailPng` also accepts an omitted or `null` options value.
+The package exports `ThumbnailOptions`, `ThumbnailFit`, `ThumbnailFilter`,
+`ThumbnailOutputFormat`, `PngOptions`, `PngColorMode`, `PngCompression`, and
+`PngFilter` TypeScript types. Every option is optional, and `thumbnailPng` also
+accepts an omitted or `null` options value. PNG output remains RGBA8 by default;
+the nested `png` object can select automatic or explicit 8-bit color output,
+compression, and scanline filtering.
 
 ## Node.js and Deno
 

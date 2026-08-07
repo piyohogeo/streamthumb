@@ -43,6 +43,7 @@ All numeric options must be non-negative JavaScript safe integers. Operational d
 | `filter` | `"area"` | Uses the area resampling filter. This is the only supported filter. |
 | `allowUpscale` | `false` | When false, neither output dimension exceeds the corresponding input dimension. |
 | `output` | `"png"` | Selects encoded `"png"` or raw `"rgba"` output. |
+| `png` | RGBA8, balanced compression, default filter | Optional PNG-only encoder settings described below. Supplying this object with raw RGBA output is an error. |
 | `maxInputBytes` | `67,108,864` (64 MiB) | Maximum encoded input length. |
 | `maxInputWidth` | `100,000` | Maximum width declared by the PNG header. |
 | `maxInputHeight` | `100,000` | Maximum height declared by the PNG header. |
@@ -53,6 +54,33 @@ All numeric options must be non-negative JavaScript safe integers. Operational d
 | `maxMemoryBytes` | `33,554,432` (32 MiB) | Maximum conservative working-memory estimate. It covers decoder storage, resize storage, one completed output row for encoded PNG or the complete frame for raw RGBA, encoder state, and bounded encoded output. It excludes caller-owned input, JavaScript memory, WebAssembly runtime overhead, and allocator slack. |
 
 The requested bounding box and all applicable resource limits must pass. Setting a limit lower than the requested or calculated operation does not clamp the output; it rejects the operation.
+
+### PNG encoder options
+
+The nested `png` object accepts these optional string properties:
+
+| Property | Default | Values |
+| --- | --- | --- |
+| `color` | `"rgba8"` | `"auto"`, `"rgba8"`, `"rgb8"`, `"grayscale-alpha8"`, `"grayscale8"` |
+| `compression` | `"balanced"` | `"none"`, `"fastest"`, `"fast"`, `"balanced"`, `"high"` |
+| `filter` | `"default"` | `"default"`, `"none"`, `"sub"`, `"up"`, `"average"`, `"paeth"`, `"adaptive"`, `"min-entropy"` |
+
+`"rgba8"` remains the default for backward compatibility. `"rgb8"` discards
+alpha. The grayscale modes convert the current encoded-space RGB samples using
+the integer formula `(77 * R + 150 * G + 29 * B + 128) >> 8`; `"grayscale8"`
+also discards alpha.
+
+`"auto"` does not buffer or inspect the resized output. Before decoding image
+data, it selects the smallest lossless representation proven by input metadata:
+grayscale remains grayscale, RGB remains RGB, and an alpha channel is retained
+when the source type or `tRNS` requires it. Palette input is grayscale only when
+every declared palette entry is grayscale; otherwise it becomes RGB. Palette
+transparency selects an alpha-bearing form. Output PNG files remain 8-bit and
+non-interlaced.
+
+`"default"` lets the selected compression preset choose its scanline filter.
+Explicit filters override that choice. Compression and filtering can change
+runtime and encoded size but not decoded pixels.
 
 ## Result
 

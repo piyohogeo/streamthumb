@@ -31,3 +31,5 @@ project follows Semantic Versioning.
 - Direct row-streamed PNG encoding for ordered and Adam7 inputs, removing the
   complete resized RGBA frame from encoded-output memory while preserving the
   raw RGBA API and bounded encoded-byte result.
+- Typed PNG color, compression, and filter settings across Rust, WebAssembly,
+  and CLI APIs, including metadata-safe automatic color selection.

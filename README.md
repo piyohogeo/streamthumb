@@ -17,6 +17,22 @@ The project currently implements checked thumbnail geometry, resource-limit vali
 cargo run -p streamthumb-cli -- input.png output.png --max-width 512 --max-height 512
 ```
 
+PNG encoding can be configured with `--png-color`, `--png-compression`, and
+`--png-filter`. For example:
+
+```text
+cargo run -p streamthumb-cli -- input.png output.png --png-color auto --png-compression high --png-filter adaptive
+```
+
+The Rust API exposes `PngOptions` through
+`thumbnail_png_with_encoder_options`; the existing `thumbnail_png` function
+retains its RGBA8, balanced-compression defaults.
+
+CLI values match the WebAssembly literals: color accepts `auto`, `rgba8`,
+`rgb8`, `grayscale-alpha8`, or `grayscale8`; compression accepts `none`,
+`fastest`, `fast`, `balanced`, or `high`; and filter accepts `default`, `none`,
+`sub`, `up`, `average`, `paeth`, `adaptive`, or `min-entropy`.
+
 ## WebAssembly
 
 Build a browser-targeted package with:

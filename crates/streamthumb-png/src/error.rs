@@ -31,6 +31,7 @@ pub enum Error {
     },
     DecodeFailure(String),
     EncodeFailure(String),
+    InvalidPngOptions(&'static str),
     EncodedOutputLimitExceeded {
         limit: usize,
     },
@@ -54,6 +55,9 @@ impl fmt::Display for Error {
             }
             Self::DecodeFailure(message) => write!(formatter, "PNG decode failure: {message}"),
             Self::EncodeFailure(message) => write!(formatter, "PNG encode failure: {message}"),
+            Self::InvalidPngOptions(message) => {
+                write!(formatter, "invalid PNG encoder options: {message}")
+            }
             Self::EncodedOutputLimitExceeded { limit } => {
                 write!(formatter, "encoded PNG exceeded its {limit}-byte limit")
             }

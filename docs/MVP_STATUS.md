@@ -15,6 +15,7 @@ version 0.1.0 before publication.
 | Malformed and oversized input rejection | Complete | Typed error tests cover truncation, malformed chunks, APNG, byte, dimension, pixel, output, decoder-memory, and working-memory limits. Fuzz targets cover rows, thumbnails, and the area downsampler. |
 | Configurable resource limits | Complete | Rust and WebAssembly APIs expose every required input, output, and working-memory limit. Defaults and documentation are checked together in CI. |
 | Rust-native CLI | Complete | `streamthumb-cli` produces bounded encoded PNG output and validates its arguments and input size. |
+| PNG encoder configuration | Complete | Rust, WebAssembly, and CLI APIs expose 8-bit color mode, compression, and filter settings. Tests verify IHDR color types, decoded pixels, every compression/filter combination, Adam7 input, defaults, and invalid boundary values. |
 | Browser WebAssembly package | Complete | Chrome and Firefox run worker-based wasm-bindgen tests. A separately installed tarball consumer and the public browser example run in headless Chrome. |
 | Node.js and Deno package use | Complete | CI installs the tarball into an isolated consumer and runs the public examples with explicit WebAssembly bytes. |
 | Cloudflare Worker adapter | Source complete; runtime deferred | The runtime-neutral adapter and local package reference are checked. Live-account validation is intentionally excluded because no Cloudflare account is available. |
@@ -41,6 +42,13 @@ For encoded PNG, `output_rgba_bytes` is now zero and `output_row_bytes` records
 the one reusable completed row. The complete encoded PNG remains buffered and
 bounded because the public API returns a `Vec<u8>` or JavaScript byte array.
 Raw RGBA output intentionally continues to retain the complete output frame.
+
+The third extension stage adds typed PNG encoder configuration. Rust callers
+use `PngOptions` with `thumbnail_png_with_encoder_options`; WebAssembly uses a
+nested `png` object; and the CLI exposes matching flags. RGBA8 remains the
+backward-compatible default. Explicit RGB and grayscale conversion, safe
+metadata-driven automatic color selection, five compression presets, and eight
+filter strategies are covered by format and pixel tests.
 
 ## Explicit limitations and deferred work
 

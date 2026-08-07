@@ -16,6 +16,7 @@ self.addEventListener("message", ({ data }) => {
       maxWidth: 512,
       maxHeight: 512,
       output: "png",
+      png: { color: "auto", compression: "balanced", filter: "default" },
       maxMemoryBytes: 32 * 1024 * 1024,
     });
     const bytes = result.bytes;

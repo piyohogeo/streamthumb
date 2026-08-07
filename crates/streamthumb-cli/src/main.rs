@@ -1,7 +1,10 @@
 use std::{env, error::Error, fmt, fs, path::PathBuf, process::ExitCode};
 
 use streamthumb_core::{OutputFormat, ThumbnailOptions};
-use streamthumb_png::{ThumbnailOutput, thumbnail_png};
+use streamthumb_png::{
+    PngColorMode, PngCompression, PngFilter, PngOptions, ThumbnailOutput,
+    thumbnail_png_with_encoder_options,
+};
 
 fn main() -> ExitCode {
     match run() {
@@ -25,7 +28,7 @@ fn run() -> Result<(), CliError> {
     }
 
     let input = fs::read(&config.input)?;
-    let output = thumbnail_png(&input, &config.options)?;
+    let output = thumbnail_png_with_encoder_options(&input, &config.options, &config.png_options)?;
     let ThumbnailOutput::Encoded { bytes, .. } = output else {
         return Err(CliError::Message(
             "internal error: CLI requested a non-PNG output".to_owned(),
@@ -40,6 +43,7 @@ struct Config {
     input: PathBuf,
     output: PathBuf,
     options: ThumbnailOptions,
+    png_options: PngOptions,
 }
 
 impl Config {
@@ -51,6 +55,7 @@ impl Config {
             output: OutputFormat::Png,
             ..ThumbnailOptions::default()
         };
+        let mut png_options = PngOptions::default();
 
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -61,6 +66,42 @@ impl Config {
                     options.max_height = parse_dimension(arguments.next(), "--max-height")?;
                 }
                 "--allow-upscale" => options.allow_upscale = true,
+                "--png-color" => {
+                    let value = required_value(arguments.next(), "--png-color")?;
+                    png_options.color = match value.as_str() {
+                        "auto" => PngColorMode::Auto,
+                        "rgba8" => PngColorMode::Rgba8,
+                        "rgb8" => PngColorMode::Rgb8,
+                        "grayscale-alpha8" => PngColorMode::GrayscaleAlpha8,
+                        "grayscale8" => PngColorMode::Grayscale8,
+                        _ => return Err(invalid_choice("--png-color", &value)),
+                    };
+                }
+                "--png-compression" => {
+                    let value = required_value(arguments.next(), "--png-compression")?;
+                    png_options.compression = match value.as_str() {
+                        "none" => PngCompression::NoCompression,
+                        "fastest" => PngCompression::Fastest,
+                        "fast" => PngCompression::Fast,
+                        "balanced" => PngCompression::Balanced,
+                        "high" => PngCompression::High,
+                        _ => return Err(invalid_choice("--png-compression", &value)),
+                    };
+                }
+                "--png-filter" => {
+                    let value = required_value(arguments.next(), "--png-filter")?;
+                    png_options.filter = match value.as_str() {
+                        "default" => PngFilter::Default,
+                        "none" => PngFilter::None,
+                        "sub" => PngFilter::Sub,
+                        "up" => PngFilter::Up,
+                        "average" => PngFilter::Average,
+                        "paeth" => PngFilter::Paeth,
+                        "adaptive" => PngFilter::Adaptive,
+                        "min-entropy" => PngFilter::MinEntropy,
+                        _ => return Err(invalid_choice("--png-filter", &value)),
+                    };
+                }
                 _ => {
                     return Err(CliError::Message(format!(
                         "unknown argument {argument:?}\n{}",
@@ -74,8 +115,17 @@ impl Config {
             input: input.into(),
             output: output.into(),
             options,
+            png_options,
         })
     }
+}
+
+fn required_value(value: Option<String>, flag: &str) -> Result<String, CliError> {
+    value.ok_or_else(|| CliError::Message(format!("{flag} requires a value")))
+}
+
+fn invalid_choice(flag: &str, value: &str) -> CliError {
+    CliError::Message(format!("invalid {flag} value {value:?}\n{}", usage_text()))
 }
 
 fn parse_dimension(value: Option<String>, flag: &str) -> Result<u32, CliError> {
@@ -96,7 +146,7 @@ fn usage() -> CliError {
 }
 
 const fn usage_text() -> &'static str {
-    "usage: streamthumb <input.png> <output.png> [--max-width N] [--max-height N] [--allow-upscale]"
+    "usage: streamthumb <input.png> <output.png> [--max-width N] [--max-height N] [--allow-upscale] [--png-color MODE] [--png-compression LEVEL] [--png-filter FILTER]"
 }
 
 #[derive(Debug)]
@@ -164,6 +214,29 @@ mod tests {
         assert_eq!(config.options.max_height, 200);
         assert!(config.options.allow_upscale);
         assert_eq!(config.options.output, OutputFormat::Png);
+        assert_eq!(config.png_options, PngOptions::default());
+    }
+
+    #[test]
+    fn parses_png_encoder_options() {
+        let config = Config::parse(
+            [
+                "input.png",
+                "output.png",
+                "--png-color",
+                "auto",
+                "--png-compression",
+                "high",
+                "--png-filter",
+                "min-entropy",
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+
+        assert_eq!(config.png_options.color, PngColorMode::Auto);
+        assert_eq!(config.png_options.compression, PngCompression::High);
+        assert_eq!(config.png_options.filter, PngFilter::MinEntropy);
     }
 
     #[test]
@@ -171,5 +244,9 @@ mod tests {
         assert!(Config::parse(Vec::<String>::new()).is_err());
         assert!(Config::parse(["in", "out", "--max-width", "0"].map(str::to_owned)).is_err());
         assert!(Config::parse(["in", "out", "--unknown"].map(str::to_owned)).is_err());
+        assert!(
+            Config::parse(["in", "out", "--png-color", "indexed8"].map(str::to_owned)).is_err()
+        );
+        assert!(Config::parse(["in", "out", "--png-filter"].map(str::to_owned)).is_err());
     }
 }

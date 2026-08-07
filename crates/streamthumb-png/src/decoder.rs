@@ -6,7 +6,10 @@ use streamthumb_core::{
     SparseAreaDownsampler, ThumbnailOptions, plan_thumbnail, plan_thumbnail_sparse,
 };
 
-use crate::{Error, Result, ThumbnailOutput, UnsupportedFeature, encoder::PngRowSink};
+use crate::{
+    Error, PngColorMode, PngOptions, Result, ThumbnailOutput, UnsupportedFeature,
+    encoder::{EncoderColor, PngRowSink},
+};
 
 /// A normalized 8-bit RGBA source row.
 #[derive(Clone, Copy, Debug)]
@@ -163,31 +166,58 @@ pub fn thumbnail_png(input: &[u8], options: &ThumbnailOptions) -> Result<Thumbna
             Ok(image.into())
         }
         OutputFormat::Png => {
-            let (bytes, plan) = thumbnail_png_encoded(input, options)?;
-            Ok(ThumbnailOutput::Encoded {
-                bytes,
-                width: plan.output.width,
-                height: plan.output.height,
-                mime_type: "image/png",
-            })
+            thumbnail_png_with_encoder_options(input, options, &PngOptions::default())
         }
     }
+}
+
+/// Creates a thumbnail with codec-specific PNG encoder settings.
+///
+/// PNG settings are rejected when raw RGBA output is requested.
+pub fn thumbnail_png_with_encoder_options(
+    input: &[u8],
+    options: &ThumbnailOptions,
+    png_options: &PngOptions,
+) -> Result<ThumbnailOutput> {
+    if options.output != OutputFormat::Png {
+        return Err(Error::InvalidPngOptions("PNG settings require PNG output"));
+    }
+    let (bytes, plan) = thumbnail_png_encoded(input, options, *png_options)?;
+    Ok(ThumbnailOutput::Encoded {
+        bytes,
+        width: plan.output.width,
+        height: plan.output.height,
+        mime_type: "image/png",
+    })
 }
 
 fn thumbnail_png_encoded(
     input: &[u8],
     options: &ThumbnailOptions,
+    png_options: PngOptions,
 ) -> Result<(Vec<u8>, ProcessingPlan)> {
-    if png_is_interlaced(input, options)? {
+    let inspection = inspect_png(input, options)?;
+    let color = resolve_encoder_color(png_options.color, inspection.auto_color);
+    if inspection.interlaced {
         let (downsampler, plan) = thumbnail_png_adam7_downsampler(input, options)?;
-        let sink = PngRowSink::new(plan.output, plan.memory.encoded_output_bytes)?;
+        let sink = PngRowSink::new(
+            plan.output,
+            plan.memory.encoded_output_bytes,
+            color,
+            png_options,
+        )?;
         return Ok((downsampler.finish_into(sink)?, plan));
     }
 
     let mut downsampler: Option<AreaDownsampler<PngRowSink>> = None;
     let decoded = decode_png_rows(input, options, |row| {
         if downsampler.is_none() {
-            let sink = PngRowSink::new(row.plan.output, row.plan.memory.encoded_output_bytes)?;
+            let sink = PngRowSink::new(
+                row.plan.output,
+                row.plan.memory.encoded_output_bytes,
+                color,
+                png_options,
+            )?;
             downsampler = Some(AreaDownsampler::with_sink(
                 row.plan.source,
                 row.plan.output,
@@ -232,6 +262,16 @@ fn thumbnail_png_rgba_planned(
 }
 
 fn png_is_interlaced(input: &[u8], options: &ThumbnailOptions) -> Result<bool> {
+    inspect_png(input, options).map(|inspection| inspection.interlaced)
+}
+
+#[derive(Clone, Copy)]
+struct PngInspection {
+    interlaced: bool,
+    auto_color: EncoderColor,
+}
+
+fn inspect_png(input: &[u8], options: &ThumbnailOptions) -> Result<PngInspection> {
     checked_encoded_length(input, options)?;
     let decoder_limit = options.limits.max_working_memory_bytes;
     let mut decoder = png::Decoder::new_with_limits(
@@ -247,7 +287,88 @@ fn png_is_interlaced(input: &[u8], options: &ThumbnailOptions) -> Result<bool> {
         .map_err(|error| map_decode_error(error, decoder_limit))?;
     validate_source_color_depth(header.color_type, header.bit_depth)?;
     validate_direct_trns_chunk_length(input, header.color_type)?;
-    Ok(header.interlaced)
+    Ok(PngInspection {
+        interlaced: header.interlaced,
+        auto_color: auto_encoder_color(input, header.color_type),
+    })
+}
+
+const fn resolve_encoder_color(requested: PngColorMode, automatic: EncoderColor) -> EncoderColor {
+    match requested {
+        PngColorMode::Auto => automatic,
+        PngColorMode::Rgba8 => EncoderColor::Rgba8,
+        PngColorMode::Rgb8 => EncoderColor::Rgb8,
+        PngColorMode::GrayscaleAlpha8 => EncoderColor::GrayscaleAlpha8,
+        PngColorMode::Grayscale8 => EncoderColor::Grayscale8,
+    }
+}
+
+fn auto_encoder_color(input: &[u8], color_type: ColorType) -> EncoderColor {
+    let transparency = find_chunk_data(input, b"tRNS");
+    match color_type {
+        ColorType::Grayscale => {
+            if transparency.is_some() {
+                EncoderColor::GrayscaleAlpha8
+            } else {
+                EncoderColor::Grayscale8
+            }
+        }
+        ColorType::GrayscaleAlpha => EncoderColor::GrayscaleAlpha8,
+        ColorType::Rgb => {
+            if transparency.is_some() {
+                EncoderColor::Rgba8
+            } else {
+                EncoderColor::Rgb8
+            }
+        }
+        ColorType::Rgba => EncoderColor::Rgba8,
+        ColorType::Indexed => {
+            let grayscale = find_chunk_data(input, b"PLTE").is_some_and(|palette| {
+                !palette.is_empty()
+                    && palette.len() % 3 == 0
+                    && palette
+                        .chunks_exact(3)
+                        .all(|color| color[0] == color[1] && color[1] == color[2])
+            });
+            let has_transparency =
+                transparency.is_some_and(|alpha| alpha.iter().any(|value| *value != 255));
+            match (grayscale, has_transparency) {
+                (true, false) => EncoderColor::Grayscale8,
+                (true, true) => EncoderColor::GrayscaleAlpha8,
+                (false, false) => EncoderColor::Rgb8,
+                (false, true) => EncoderColor::Rgba8,
+            }
+        }
+    }
+}
+
+fn find_chunk_data<'a>(input: &'a [u8], expected_type: &[u8; 4]) -> Option<&'a [u8]> {
+    let mut offset = 8_usize;
+    while offset.checked_add(12)? <= input.len() {
+        let length = usize::try_from(u32::from_be_bytes([
+            input[offset],
+            input[offset + 1],
+            input[offset + 2],
+            input[offset + 3],
+        ]))
+        .ok()?;
+        let chunk_type_start = offset.checked_add(4)?;
+        let data_start = chunk_type_start.checked_add(4)?;
+        let data_end = data_start.checked_add(length)?;
+        let chunk_end = data_end.checked_add(4)?;
+        if chunk_end > input.len() {
+            return None;
+        }
+        let chunk_type = &input[chunk_type_start..data_start];
+        if chunk_type == expected_type {
+            return Some(&input[data_start..data_end]);
+        }
+        if chunk_type == b"IDAT" {
+            return None;
+        }
+        offset = chunk_end;
+    }
+    None
 }
 
 fn thumbnail_png_adam7_rgba_planned(
@@ -1086,6 +1207,7 @@ fn map_decode_error(error: png::DecodingError, decoder_limit: usize) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{PngCompression, PngFilter};
     use flate2::{Compression, write::ZlibEncoder};
     use png::Filter;
     use std::io::Write;
@@ -1108,6 +1230,22 @@ mod tests {
         writer.write_image_data(pixels).unwrap();
         writer.finish().unwrap();
         encoded
+    }
+
+    fn decode_raw_png(encoded: &[u8]) -> (ColorType, Vec<u8>) {
+        let mut reader = png::Decoder::new(Cursor::new(encoded)).read_info().unwrap();
+        let color = reader.output_color_type().0;
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        pixels.truncate(info.buffer_size());
+        (color, pixels)
+    }
+
+    fn encoded_bytes(output: ThumbnailOutput) -> Vec<u8> {
+        match output {
+            ThumbnailOutput::Encoded { bytes, .. } => bytes,
+            ThumbnailOutput::Rgba { .. } => panic!("expected encoded PNG output"),
+        }
     }
 
     fn test_depth_bits(depth: BitDepth) -> usize {
@@ -2189,6 +2327,215 @@ mod tests {
     }
 
     #[test]
+    fn explicit_png_color_modes_write_expected_color_types_and_pixels() {
+        let input = encode_png(
+            2,
+            1,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::NoFilter,
+            &[255, 0, 0, 64, 0, 255, 0, 255],
+        );
+        let thumbnail_options = ThumbnailOptions {
+            max_width: 2,
+            max_height: 1,
+            output: OutputFormat::Png,
+            ..default_options()
+        };
+        let cases = [
+            (
+                PngColorMode::Rgba8,
+                ColorType::Rgba,
+                vec![255, 0, 0, 64, 0, 255, 0, 255],
+            ),
+            (
+                PngColorMode::Rgb8,
+                ColorType::Rgb,
+                vec![255, 0, 0, 0, 255, 0],
+            ),
+            (
+                PngColorMode::GrayscaleAlpha8,
+                ColorType::GrayscaleAlpha,
+                vec![77, 64, 149, 255],
+            ),
+            (
+                PngColorMode::Grayscale8,
+                ColorType::Grayscale,
+                vec![77, 149],
+            ),
+        ];
+
+        for (color, expected_type, expected_pixels) in cases {
+            let options = PngOptions {
+                color,
+                ..PngOptions::default()
+            };
+            let output =
+                thumbnail_png_with_encoder_options(&input, &thumbnail_options, &options).unwrap();
+            let (actual_type, actual_pixels) = decode_raw_png(&encoded_bytes(output));
+            assert_eq!(actual_type, expected_type, "color mode {color:?}");
+            assert_eq!(actual_pixels, expected_pixels, "color mode {color:?}");
+        }
+    }
+
+    #[test]
+    fn default_png_options_are_deterministic_and_match_the_convenience_api() {
+        let input = encode_png(
+            3,
+            1,
+            ColorType::Rgb,
+            BitDepth::Eight,
+            Filter::Sub,
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+        );
+        let options = default_options();
+        let first = encoded_bytes(thumbnail_png(&input, &options).unwrap());
+        let second = encoded_bytes(
+            thumbnail_png_with_encoder_options(&input, &options, &PngOptions::default()).unwrap(),
+        );
+
+        assert_eq!(first, second);
+        assert_eq!(decode_raw_png(&first).0, ColorType::Rgba);
+    }
+
+    #[test]
+    fn auto_png_color_uses_only_safe_input_metadata() {
+        let grayscale = encode_grayscale_png(2, 1, BitDepth::Eight, &[10, 20], None);
+        let grayscale_alpha = encode_grayscale_png(2, 1, BitDepth::Eight, &[10, 20], Some(10));
+        let rgb = encode_png(
+            1,
+            1,
+            ColorType::Rgb,
+            BitDepth::Eight,
+            Filter::NoFilter,
+            &[1, 2, 3],
+        );
+        let rgba = encode_png(
+            1,
+            1,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::NoFilter,
+            &[1, 2, 3, 4],
+        );
+        let gray_palette =
+            encode_palette_png(2, 1, BitDepth::One, &[0, 1], &[0, 0, 0, 9, 9, 9], &[]);
+        let color_palette =
+            encode_palette_png(2, 1, BitDepth::One, &[0, 1], &[1, 2, 3, 4, 5, 6], &[255, 7]);
+        let cases = [
+            (&grayscale, ColorType::Grayscale),
+            (&grayscale_alpha, ColorType::GrayscaleAlpha),
+            (&rgb, ColorType::Rgb),
+            (&rgba, ColorType::Rgba),
+            (&gray_palette, ColorType::Grayscale),
+            (&color_palette, ColorType::Rgba),
+        ];
+        let options = PngOptions {
+            color: PngColorMode::Auto,
+            ..PngOptions::default()
+        };
+
+        for (input, expected_type) in cases {
+            let output =
+                thumbnail_png_with_encoder_options(input, &default_options(), &options).unwrap();
+            assert_eq!(decode_raw_png(&encoded_bytes(output)).0, expected_type);
+        }
+    }
+
+    #[test]
+    fn every_compression_and_filter_setting_writes_a_valid_png() {
+        let input = encode_png(
+            3,
+            2,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::NoFilter,
+            &[17; 3 * 2 * 4],
+        );
+        let compressions = [
+            PngCompression::NoCompression,
+            PngCompression::Fastest,
+            PngCompression::Fast,
+            PngCompression::Balanced,
+            PngCompression::High,
+        ];
+        let filters = [
+            PngFilter::Default,
+            PngFilter::None,
+            PngFilter::Sub,
+            PngFilter::Up,
+            PngFilter::Average,
+            PngFilter::Paeth,
+            PngFilter::Adaptive,
+            PngFilter::MinEntropy,
+        ];
+
+        for compression in compressions {
+            for filter in filters {
+                let options = PngOptions {
+                    compression,
+                    filter,
+                    ..PngOptions::default()
+                };
+                let output =
+                    thumbnail_png_with_encoder_options(&input, &default_options(), &options)
+                        .unwrap();
+                let (color, pixels) = decode_raw_png(&encoded_bytes(output));
+                assert_eq!(color, ColorType::Rgba);
+                assert_eq!(pixels, [17; 3 * 2 * 4]);
+            }
+        }
+    }
+
+    #[test]
+    fn adam7_input_uses_the_selected_png_encoder_options() {
+        let input = encode_adam7_png(
+            2,
+            2,
+            ColorType::Rgba,
+            &[
+                255, 0, 0, 64, 0, 255, 0, 128, 0, 0, 255, 192, 255, 255, 255, 255,
+            ],
+        );
+        let options = PngOptions {
+            color: PngColorMode::GrayscaleAlpha8,
+            compression: PngCompression::High,
+            filter: PngFilter::MinEntropy,
+        };
+        let output =
+            thumbnail_png_with_encoder_options(&input, &default_options(), &options).unwrap();
+        let (color, pixels) = decode_raw_png(&encoded_bytes(output));
+
+        assert_eq!(color, ColorType::GrayscaleAlpha);
+        assert_eq!(pixels, [77, 64, 149, 128, 29, 192, 255, 255]);
+    }
+
+    #[test]
+    fn png_settings_are_rejected_for_raw_rgba_output() {
+        let input = encode_png(
+            1,
+            1,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::NoFilter,
+            &[0, 0, 0, 255],
+        );
+        let thumbnail_options = ThumbnailOptions {
+            output: OutputFormat::Rgba,
+            ..default_options()
+        };
+        let png_options = PngOptions {
+            color: PngColorMode::Rgb8,
+            ..PngOptions::default()
+        };
+
+        assert!(matches!(
+            thumbnail_png_with_encoder_options(&input, &thumbnail_options, &png_options),
+            Err(Error::InvalidPngOptions(_))
+        ));
+    }
+
+    #[test]
     fn streaming_png_matches_rgba_output_for_ordered_and_adam7_inputs() {
         let width = 9;
         let height = 7;
@@ -2225,7 +2572,8 @@ mod tests {
                 output: OutputFormat::Png,
                 ..rgba_options
             };
-            let (encoded, plan) = thumbnail_png_encoded(input, &png_options).unwrap();
+            let (encoded, plan) =
+                thumbnail_png_encoded(input, &png_options, PngOptions::default()).unwrap();
             let actual = thumbnail_png_rgba(&encoded, &rgba_options).unwrap();
 
             assert_eq!(actual, expected);

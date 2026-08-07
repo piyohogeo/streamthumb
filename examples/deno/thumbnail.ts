@@ -15,6 +15,7 @@ const result = thumbnailPng(await Deno.readFile(inputPath), {
   maxWidth: 512,
   maxHeight: 512,
   output: "png",
+  png: { color: "auto", compression: "balanced", filter: "default" },
 });
 const bytes = result.bytes;
 const summary = `${result.width}x${result.height} ${result.format}`;

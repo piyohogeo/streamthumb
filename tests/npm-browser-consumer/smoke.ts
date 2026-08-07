@@ -3,6 +3,9 @@ import init, {
   thumbnailPng,
   type ThumbnailOptions,
   type ThumbnailOutputFormat,
+  type PngColorMode,
+  type PngCompression,
+  type PngFilter,
 } from "@streamthumb/wasm";
 
 const statusElement = document.querySelector<HTMLPreElement>("#status");
@@ -27,6 +30,9 @@ function hasPngSignature(bytes: Uint8Array) {
 }
 
 const output: ThumbnailOutputFormat = "png";
+const pngColor: PngColorMode = "auto";
+const pngCompression: PngCompression = "fast";
+const pngFilter: PngFilter = "adaptive";
 const options: ThumbnailOptions = {
   maxWidth: 32,
   maxHeight: 32,
@@ -34,6 +40,11 @@ const options: ThumbnailOptions = {
   filter: "area",
   allowUpscale: false,
   output,
+  png: {
+    color: pngColor,
+    compression: pngCompression,
+    filter: pngFilter,
+  },
   maxMemoryBytes: 32 * 1024 * 1024,
 };
 
@@ -42,8 +53,11 @@ const options: ThumbnailOptions = {
 const invalidOutput: ThumbnailOptions = { output: "jpeg" };
 // @ts-expect-error Width must be numeric.
 const invalidWidth: ThumbnailOptions = { maxWidth: "32" };
+// @ts-expect-error Indexed PNG output is not supported.
+const invalidPngColor: ThumbnailOptions = { png: { color: "indexed8" } };
 void invalidOutput;
 void invalidWidth;
+void invalidPngColor;
 
 try {
   await init();

@@ -17,6 +17,7 @@ export default {
         maxWidth: 512,
         maxHeight: 512,
         output: "png",
+        png: { color: "auto", compression: "balanced", filter: "default" },
         maxInputBytes: 64 * 1024 * 1024,
         maxInputPixels: 500_000_000,
         maxMemoryBytes: 32 * 1024 * 1024,
@@ -33,4 +34,3 @@ export default {
     }
   },
 };
-

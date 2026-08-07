@@ -2,7 +2,11 @@
 
 use js_sys::Reflect;
 use streamthumb_core::{Filter, Fit, OutputFormat, ThumbnailOptions};
-use streamthumb_png::{ThumbnailOutput, thumbnail_png as create_thumbnail};
+use streamthumb_png::{
+    PngColorMode, PngCompression, PngFilter, PngOptions, ThumbnailOutput,
+    thumbnail_png as create_thumbnail,
+    thumbnail_png_with_encoder_options as create_thumbnail_with_png_options,
+};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -18,6 +22,22 @@ export type ThumbnailFilter = "area";
 /** Output representations supported by the WebAssembly API. */
 export type ThumbnailOutputFormat = "png" | "rgba";
 
+/** PNG color representations supported by the streaming encoder. */
+export type PngColorMode = "auto" | "rgba8" | "rgb8" | "grayscale-alpha8" | "grayscale8";
+
+/** PNG compression speed and size tradeoffs. */
+export type PngCompression = "none" | "fastest" | "fast" | "balanced" | "high";
+
+/** PNG scanline filter strategies. */
+export type PngFilter = "default" | "none" | "sub" | "up" | "average" | "paeth" | "adaptive" | "min-entropy";
+
+/** Settings used only when output is "png". */
+export interface PngOptions {
+    color?: PngColorMode;
+    compression?: PngCompression;
+    filter?: PngFilter;
+}
+
 /** Options and resource limits for thumbnail generation. */
 export interface ThumbnailOptions {
     maxWidth?: number;
@@ -26,6 +46,7 @@ export interface ThumbnailOptions {
     filter?: ThumbnailFilter;
     allowUpscale?: boolean;
     output?: ThumbnailOutputFormat;
+    png?: PngOptions;
     maxInputBytes?: number;
     maxInputWidth?: number;
     maxInputHeight?: number;
@@ -64,9 +85,12 @@ pub fn wasm_memory_bytes() -> u32 {
 /// Creates a bounded PNG or RGBA thumbnail from encoded PNG bytes.
 #[wasm_bindgen(js_name = thumbnailPng, skip_typescript)]
 pub fn thumbnail_png(input: &[u8], options: &JsValue) -> Result<ThumbnailResult, JsError> {
-    let options = parse_options(options)?;
-    let output =
-        create_thumbnail(input, &options).map_err(|error| JsError::new(&error.to_string()))?;
+    let (options, png_options) = parse_options(options)?;
+    let output = match options.output {
+        OutputFormat::Png => create_thumbnail_with_png_options(input, &options, &png_options),
+        OutputFormat::Rgba => create_thumbnail(input, &options),
+    }
+    .map_err(|error| JsError::new(&error.to_string()))?;
     ThumbnailResult::from_output(output)
 }
 
@@ -141,10 +165,10 @@ impl ThumbnailResult {
     }
 }
 
-fn parse_options(value: &JsValue) -> Result<ThumbnailOptions, JsError> {
+fn parse_options(value: &JsValue) -> Result<(ThumbnailOptions, PngOptions), JsError> {
     let mut options = ThumbnailOptions::default();
     if value.is_null() || value.is_undefined() {
-        return Ok(options);
+        return Ok((options, PngOptions::default()));
     }
     if !value.is_object() {
         return Err(JsError::new("thumbnail options must be an object"));
@@ -178,6 +202,15 @@ fn parse_options(value: &JsValue) -> Result<ThumbnailOptions, JsError> {
             _ => return Err(JsError::new("output must be \"png\" or \"rgba\"")),
         };
     }
+    let png_value = optional_property(value, "png")?;
+    if png_value.is_some() && options.output != OutputFormat::Png {
+        return Err(JsError::new("png options require output \"png\""));
+    }
+    let png_options = png_value
+        .as_ref()
+        .map(parse_png_options)
+        .transpose()?
+        .unwrap_or_default();
 
     if let Some(number) = optional_u64(value, "maxInputBytes")? {
         options.limits.max_input_bytes = number;
@@ -205,6 +238,59 @@ fn parse_options(value: &JsValue) -> Result<ThumbnailOptions, JsError> {
             .map_err(|_| JsError::new("maxMemoryBytes is too large for this WebAssembly build"))?;
     }
 
+    Ok((options, png_options))
+}
+
+fn parse_png_options(value: &JsValue) -> Result<PngOptions, JsError> {
+    if !value.is_object() || js_sys::Array::is_array(value) {
+        return Err(JsError::new("png must be an object"));
+    }
+    let mut options = PngOptions::default();
+    if let Some(color) = optional_string(value, "color")? {
+        options.color = match color.as_str() {
+            "auto" => PngColorMode::Auto,
+            "rgba8" => PngColorMode::Rgba8,
+            "rgb8" => PngColorMode::Rgb8,
+            "grayscale-alpha8" => PngColorMode::GrayscaleAlpha8,
+            "grayscale8" => PngColorMode::Grayscale8,
+            _ => {
+                return Err(JsError::new(
+                    "png.color must be \"auto\", \"rgba8\", \"rgb8\", \"grayscale-alpha8\", or \"grayscale8\"",
+                ));
+            }
+        };
+    }
+    if let Some(compression) = optional_string(value, "compression")? {
+        options.compression = match compression.as_str() {
+            "none" => PngCompression::NoCompression,
+            "fastest" => PngCompression::Fastest,
+            "fast" => PngCompression::Fast,
+            "balanced" => PngCompression::Balanced,
+            "high" => PngCompression::High,
+            _ => {
+                return Err(JsError::new(
+                    "png.compression must be \"none\", \"fastest\", \"fast\", \"balanced\", or \"high\"",
+                ));
+            }
+        };
+    }
+    if let Some(filter) = optional_string(value, "filter")? {
+        options.filter = match filter.as_str() {
+            "default" => PngFilter::Default,
+            "none" => PngFilter::None,
+            "sub" => PngFilter::Sub,
+            "up" => PngFilter::Up,
+            "average" => PngFilter::Average,
+            "paeth" => PngFilter::Paeth,
+            "adaptive" => PngFilter::Adaptive,
+            "min-entropy" => PngFilter::MinEntropy,
+            _ => {
+                return Err(JsError::new(
+                    "png.filter must be \"default\", \"none\", \"sub\", \"up\", \"average\", \"paeth\", \"adaptive\", or \"min-entropy\"",
+                ));
+            }
+        };
+    }
     Ok(options)
 }
 
@@ -317,6 +403,29 @@ mod browser_tests {
     }
 
     #[wasm_bindgen_test]
+    fn applies_nested_png_encoder_options() {
+        let options = Object::new();
+        let png = Object::new();
+        for (name, value) in [
+            ("color", "grayscale8"),
+            ("compression", "fast"),
+            ("filter", "paeth"),
+        ] {
+            Reflect::set(
+                png.as_ref(),
+                &JsValue::from_str(name),
+                &JsValue::from_str(value),
+            )
+            .expect("the PNG options object must be writable");
+        }
+        Reflect::set(options.as_ref(), &JsValue::from_str("png"), png.as_ref())
+            .expect("the thumbnail options object must be writable");
+
+        let result = thumbnail_png(PNG_INPUT, options.as_ref()).expect("thumbnail must succeed");
+        assert_eq!(result.bytes()[25], 0, "IHDR must declare grayscale output");
+    }
+
+    #[wasm_bindgen_test]
     fn reports_invalid_browser_options() {
         match thumbnail_png(PNG_INPUT, &JsValue::from_str("invalid")) {
             Ok(_) => panic!("non-object options must fail"),
@@ -376,5 +485,29 @@ mod browser_tests {
                 "{name} must reject its invalid test value"
             );
         }
+
+        for (name, value) in [
+            ("color", "indexed8"),
+            ("compression", "maximum"),
+            ("filter", "predictive"),
+        ] {
+            let options = Object::new();
+            let png = options_with(name, &JsValue::from_str(value));
+            Reflect::set(options.as_ref(), &JsValue::from_str("png"), png.as_ref())
+                .expect("the thumbnail options object must be writable");
+            assert!(
+                thumbnail_png(PNG_INPUT, options.as_ref()).is_err(),
+                "png.{name} must reject its invalid test value"
+            );
+        }
+
+        let rgba = options_with("output", &JsValue::from_str("rgba"));
+        Reflect::set(
+            rgba.as_ref(),
+            &JsValue::from_str("png"),
+            Object::new().as_ref(),
+        )
+        .expect("the thumbnail options object must be writable");
+        assert!(thumbnail_png(PNG_INPUT, rgba.as_ref()).is_err());
     }
 }

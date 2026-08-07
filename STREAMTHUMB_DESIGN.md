@@ -1264,3 +1264,13 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 5. Ordered and Adam7 regression tests decode the streamed PNG and compare exact pixels with the compatibility RGBA path. Sink tests cover row-order and encoded-output-limit failures.
 6. A 2,048 x 2,048 output comparison against commit `c8d0a24` measured the architecture change. The conservative plan fell from 36,382,979 to 19,605,763 bytes; native Peak RSS fell from 23.80 to 8.31 MiB, and WebAssembly linear-memory high-water fell from 36.06 to 2.38 MiB on the documented Windows development host. These are single-run architectural measurements, not stable performance thresholds.
 7. This phase adds no codec options or dependencies and does not change the public output variants. PNG encoder configuration and JPEG remain separate later stages.
+
+### Phase 26 decisions
+
+1. Codec-specific `PngOptions`, `PngColorMode`, `PngCompression`, and `PngFilter` types live in `streamthumb-png`, preserving the codec independence of `streamthumb-core`. Existing `thumbnail_png` calls delegate to backward-compatible defaults; explicit settings use `thumbnail_png_with_encoder_options`.
+2. The default remains RGBA8 with balanced compression and the encoder's default filter. PNG output remains 8-bit and non-interlaced.
+3. Explicit RGB output discards alpha. Grayscale output uses the deterministic encoded-space integer transform `(77 * R + 150 * G + 29 * B + 128) >> 8`; grayscale-alpha preserves alpha and grayscale discards it.
+4. `Auto` decides before image-data decoding from IHDR plus bounded `PLTE` and `tRNS` inspection. Direct grayscale/RGB retain their color family and add alpha when metadata requires it. Palette output uses grayscale only when every declared entry is grayscale and otherwise uses RGB; non-opaque palette transparency selects an alpha-bearing form. It never buffers output rows to choose a format.
+5. Compression maps to the five stable public presets. `PngFilter::Default` retains the filter chosen by that preset, while seven explicit strategies override it.
+6. WebAssembly exposes the settings in a nested `png` object and rejects that object for raw RGBA output. CLI flags mirror every literal. TypeScript declarations, public examples, package checks, fuzzing, and browser boundary tests cover the new surface.
+7. Color-mode tests verify IHDR type and decoded pixels. Every compression/filter combination must decode successfully without asserting implementation-dependent encoded sizes. No JPEG dependency or option is introduced in this phase.

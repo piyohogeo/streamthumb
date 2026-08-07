@@ -12,6 +12,11 @@ using Rust 1.97.1, image 0.25.8, Node.js 24.14.1, and wasm-pack 0.15.0. They are
 illustrative and should not be treated as stable release thresholds. The
 jSquash adapter pins `@jsquash/png` 3.1.1 and `@jsquash/resize` 2.1.1.
 
+All streamthumb baseline rows use the backward-compatible PNG encoder defaults:
+RGBA8, balanced compression, and the compression preset's default scanline
+filter. Alternate color, compression, and filter settings are functional
+choices and are not mixed into these architecture comparisons.
+
 ## Streaming-output architecture comparison
 
 A separate single-case run compares the row-streamed PNG encoder with commit
