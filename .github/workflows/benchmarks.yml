@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: bash benchmarks/run-native.sh "${{ inputs.profile }}" 512
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-${{ inputs.profile }}
           path: benchmarks/results/native-${{ inputs.profile }}.jsonl
@@ -37,7 +37,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: taiki-e/install-action@wasm-pack
       - run: bash benchmarks/run-wasm.sh "${{ inputs.profile }}" 512
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wasm-${{ inputs.profile }}
           path: benchmarks/results/wasm-${{ inputs.profile }}.jsonl
@@ -48,13 +48,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: benchmarks/package-lock.json
       - run: bash benchmarks/run-jsquash.sh "${{ inputs.profile }}" 512
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: jsquash-${{ inputs.profile }}
           path: benchmarks/results/jsquash-${{ inputs.profile }}.jsonl
