@@ -13,6 +13,9 @@ project follows Semantic Versioning.
   the planned browser demo.
 - A `planThumbnailPng` WebAssembly API with plain-object input metadata, output
   geometry, complete memory breakdown, and typed memory-limit status.
+- A GitHub Pages demo with local-file and bundled-sample input, every current
+  WebAssembly option, typed memory preflight, worker-based PNG/JPEG/RGBA output,
+  previews, downloads, and automated Chrome coverage.
 
 ### Changed
 

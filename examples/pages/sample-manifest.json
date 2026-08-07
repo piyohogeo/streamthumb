@@ -1,0 +1,12 @@
+{
+  "samples": [
+    {
+      "id": "rgba-smoke",
+      "label": "Bundled RGBA sample",
+      "path": "./samples/pngsuite_basn6a08.png",
+      "source": "PNG Suite basn6a08 fixture",
+      "purpose": "Fast local preview and CI smoke testing",
+      "license": "PNG Suite license; see ./samples/PNG_SUITE_LICENSE.txt"
+    }
+  ]
+}

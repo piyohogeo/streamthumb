@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Create memory-bounded PNG and JPEG thumbnails locally in your browser with streamthumb WebAssembly."
+    />
+    <title>streamthumb · local thumbnail lab</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero__eyebrow">streamthumb / WebAssembly demo</div>
+      <h1>Make the thumbnail.<br /><span>Keep the image.</span></h1>
+      <p class="hero__lead">
+        Your PNG is processed entirely inside this browser. The selected image
+        is never uploaded to a server.
+      </p>
+      <p class="hero__note">
+        Network requests only load this page, its WebAssembly module, and the
+        bundled sample. No analytics, ads, external CDN, or upload API is used.
+      </p>
+      <div class="hero__status" id="status" role="status" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="status-text">Loading WebAssembly…</span>
+      </div>
+    </header>
+
+    <main class="workspace" aria-busy="true" id="workspace">
+      <section class="panel input-panel" aria-labelledby="input-title">
+        <div class="panel__number">01</div>
+        <h2 id="input-title">Input</h2>
+        <p class="panel__intro">PNG only. The format is validated inside WebAssembly.</p>
+
+        <label class="drop-zone" id="drop-zone" for="file-input">
+          <span class="drop-zone__icon" aria-hidden="true">↗</span>
+          <strong>Drop a PNG here</strong>
+          <span>or choose a local file</span>
+          <input id="file-input" type="file" accept="image/png,.png" disabled />
+        </label>
+
+        <button class="button button--secondary button--wide" id="sample-button" type="button" disabled>
+          Try the bundled RGBA sample
+        </button>
+
+        <dl class="facts" id="input-facts" hidden>
+          <div><dt>File</dt><dd id="input-name">—</dd></div>
+          <div><dt>Encoded size</dt><dd id="input-bytes">—</dd></div>
+          <div><dt>Dimensions</dt><dd id="input-dimensions">—</dd></div>
+          <div><dt>PNG format</dt><dd id="input-format">—</dd></div>
+          <div><dt>Interlace</dt><dd id="input-interlace">—</dd></div>
+          <div><dt>Full RGBA equivalent</dt><dd id="input-rgba">—</dd></div>
+        </dl>
+        <p class="fine-print" id="rgba-note" hidden>
+          Full RGBA equivalent is a comparison value (width × height × 4), not
+          streamthumb's actual memory use.
+        </p>
+      </section>
+
+      <section class="panel settings-panel" aria-labelledby="settings-title">
+        <div class="panel__number">02</div>
+        <h2 id="settings-title">Settings</h2>
+        <form id="settings-form">
+          <fieldset>
+            <legend>Geometry</legend>
+            <div class="control-pair">
+              <label for="max-width">Maximum width</label>
+              <div class="range-number">
+                <input id="max-width-range" type="range" min="1" max="8192" value="512" />
+                <input id="max-width" type="number" min="1" max="8192" value="512" required />
+              </div>
+            </div>
+            <div class="control-pair">
+              <label for="max-height">Maximum height</label>
+              <div class="range-number">
+                <input id="max-height-range" type="range" min="1" max="8192" value="512" />
+                <input id="max-height" type="number" min="1" max="8192" value="512" required />
+              </div>
+            </div>
+            <div class="field-row">
+              <label>Fit</label>
+              <div class="segments">
+                <label><input type="radio" name="fit" value="contain" checked /><span>Contain</span></label>
+                <label><input type="radio" name="fit" value="cover" /><span>Cover crop</span></label>
+              </div>
+            </div>
+            <label class="check-row">
+              <input id="allow-upscale" type="checkbox" />
+              <span>Allow upscaling</span>
+            </label>
+            <div class="field-row">
+              <label for="resize-filter">Resize filter</label>
+              <select id="resize-filter"><option value="area">Area</option></select>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Output</legend>
+            <div class="segments segments--three">
+              <label><input type="radio" name="output" value="png" checked /><span>PNG</span></label>
+              <label><input type="radio" name="output" value="jpeg" /><span>JPEG</span></label>
+              <label><input type="radio" name="output" value="rgba" /><span>RGBA</span></label>
+            </div>
+
+            <div id="png-options" class="option-group">
+              <div class="field-row"><label for="png-color">Color</label><select id="png-color"><option value="auto">Auto (recommended)</option><option value="rgba8" selected>RGBA8 (API default)</option><option value="rgb8">RGB8</option><option value="grayscale-alpha8">Grayscale + alpha</option><option value="grayscale8">Grayscale</option></select></div>
+              <div class="field-row"><label for="png-compression">Compression</label><select id="png-compression"><option value="none">None</option><option value="fastest">Fastest</option><option value="fast">Fast</option><option value="balanced" selected>Balanced</option><option value="high">High</option></select></div>
+              <div class="field-row"><label for="png-filter">PNG filter</label><select id="png-filter"><option value="default" selected>Default</option><option value="none">None</option><option value="sub">Sub</option><option value="up">Up</option><option value="average">Average</option><option value="paeth">Paeth</option><option value="adaptive">Adaptive</option><option value="min-entropy">Minimum entropy</option></select></div>
+            </div>
+
+            <div id="jpeg-options" class="option-group" hidden>
+              <div class="control-pair">
+                <label for="jpeg-quality">Quality</label>
+                <div class="range-number"><input id="jpeg-quality-range" type="range" min="1" max="100" value="85" /><input id="jpeg-quality" type="number" min="1" max="100" value="85" required /></div>
+              </div>
+              <div class="field-row"><label for="jpeg-background">Alpha background</label><div class="color-value"><input id="jpeg-background" type="color" value="#ffffff" /><output id="jpeg-background-value">255, 255, 255</output></div></div>
+              <div class="field-row"><label for="jpeg-subsampling">Subsampling</label><select id="jpeg-subsampling"><option value="420" selected>4:2:0</option><option value="422">4:2:2</option><option value="444">4:4:4</option></select></div>
+              <p class="fine-print">Transparent pixels are composited onto this background because JPEG has no alpha channel.</p>
+            </div>
+          </fieldset>
+
+          <details class="limits">
+            <summary>Resource limits</summary>
+            <p class="fine-print">These are processing limits passed directly to WebAssembly, not total browser-memory limits.</p>
+            <div class="control-pair memory-control">
+              <label for="max-memory">Working memory limit <output id="max-memory-bytes">33,554,432 bytes</output></label>
+              <div class="range-number"><input id="max-memory-range" type="range" min="1" max="256" value="32" /><input id="max-memory" type="number" min="1" max="256" value="32" required /><span>MiB</span></div>
+              <div class="presets" aria-label="Memory limit presets">
+                <button type="button" data-memory="4">4</button><button type="button" data-memory="8">8</button><button type="button" data-memory="16">16</button><button type="button" data-memory="32">32</button><button type="button" data-memory="64">64</button><button type="button" data-memory="128">128</button>
+              </div>
+            </div>
+            <div class="limit-grid">
+              <label>Input bytes <input id="max-input-bytes" type="number" min="1" value="67108864" required /></label>
+              <label>Input width <input id="max-input-width" type="number" min="1" value="100000" required /></label>
+              <label>Input height <input id="max-input-height" type="number" min="1" value="100000" required /></label>
+              <label>Input pixels <input id="max-input-pixels" type="number" min="1" value="500000000" required /></label>
+              <label>Output width <input id="max-output-width" type="number" min="1" value="8192" required /></label>
+              <label>Output height <input id="max-output-height" type="number" min="1" value="8192" required /></label>
+              <label>Output pixels <input id="max-output-pixels" type="number" min="1" value="16777216" required /></label>
+            </div>
+          </details>
+
+          <div class="form-actions">
+            <button class="button button--primary" id="run-button" type="submit" disabled>Run thumbnail</button>
+            <button class="button button--ghost" id="reset-button" type="button">Reset defaults</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel result-panel" aria-labelledby="result-title">
+        <div class="panel__number">03</div>
+        <h2 id="result-title">Result</h2>
+        <div class="result-state result-state--idle" id="result-state">
+          <span id="result-mark" aria-hidden="true">○</span>
+          <div><strong id="result-label">IDLE</strong><p id="result-message">Choose a PNG to begin.</p></div>
+        </div>
+
+        <div class="preview" id="preview" hidden>
+          <img id="preview-image" alt="Generated thumbnail preview" hidden />
+          <canvas id="preview-canvas" aria-label="Generated RGBA thumbnail preview" hidden></canvas>
+        </div>
+
+        <dl class="facts result-facts" id="result-facts" hidden>
+          <div><dt>Output</dt><dd id="result-output">—</dd></div>
+          <div><dt>Output size</dt><dd id="result-bytes">—</dd></div>
+          <div><dt>WASM processing time</dt><dd id="result-time">—</dd></div>
+          <div><dt>Planned working memory</dt><dd id="result-planned">—</dd></div>
+          <div><dt>Configured limit</dt><dd id="result-limit">—</dd></div>
+          <div><dt>WASM linear memory before</dt><dd id="wasm-before">—</dd></div>
+          <div><dt>WASM linear memory after</dt><dd id="wasm-after">—</dd></div>
+          <div><dt>Linear-memory growth</dt><dd id="wasm-growth">—</dd></div>
+        </dl>
+
+        <details id="memory-details" hidden>
+          <summary>Planned memory breakdown</summary>
+          <dl class="memory-list" id="memory-list"></dl>
+        </details>
+        <pre class="error-detail" id="error-detail" hidden></pre>
+        <a class="button button--secondary button--wide" id="download-link" hidden>Download result</a>
+        <p class="fine-print" id="memory-note" hidden>
+          Planned memory covers Rust-owned working storage. Input bytes,
+          JavaScript chunks, the combined result, Blob/preview data, runtime
+          overhead, and allocator slack are outside this estimate. Linear
+          memory is a process-local high-water observation, not exact usage.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <span>streamthumb <span id="version">—</span></span>
+      <span>Built from <a id="revision-link" href="https://github.com/piyohogeo/streamthumb">source</a></span>
+      <a href="https://github.com/piyohogeo/streamthumb">GitHub</a>
+    </footer>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

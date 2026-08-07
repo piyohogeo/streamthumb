@@ -1346,3 +1346,12 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 1. The planning API increased the pinned Rust 1.85 release package beyond the existing 550,000-byte unpacked-size limit even though the stable-toolchain build remained below it.
 2. The WebAssembly release profile explicitly runs `wasm-opt -Oz`, preserving the existing package-size limit instead of weakening the release check. Development and test profiles remain unchanged.
 3. This build-only optimization does not change the public API or memory-planning contract. The release-candidate workflow continues to build and verify the package with the minimum supported Rust toolchain.
+
+### Phase 35 decisions
+
+1. The GitHub Pages demo runs all planning and thumbnail work in a reusable module worker. User-selected files remain in browser-owned memory and are never sent through a network API.
+2. PNG and JPEG execution use synchronous 64 KiB chunk delivery inside the worker; raw RGBA uses the buffered API. The worker copies the required result metadata, releases every WebAssembly result object, and transfers the completed JavaScript-owned bytes back to the main thread.
+3. The UI exposes every current thumbnail option and resource limit, but execution remains an explicit user action. Memory-limit rejection uses `withinMemoryLimit` and the plan's numeric values instead of parsing diagnostic strings.
+4. Planned working memory, full RGBA equivalent, and WebAssembly linear-memory high-water observations are labeled as three different measurements. The UI does not claim that any of them is exact browser-memory usage.
+5. The site build copies only static demo files, the locally built WebAssembly package, and a licensed PNG Suite smoke fixture into `target/pages`. All runtime asset URLs are relative so deployment works below the `/streamthumb/` project path.
+6. Headless Chrome verifies PNG, JPEG, and RGBA output, browser decoding, finite planning and memory observations, typed low-memory rejection, and recovery. The Pages workflow builds and tests pull requests, while only non-pull-request runs upload and deploy the Pages artifact.

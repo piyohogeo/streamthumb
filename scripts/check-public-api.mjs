@@ -130,4 +130,36 @@ requireText(
 );
 requireText(browserWorker, "thumbnailPngToChunks", "examples/browser/worker.js");
 
+const pagesIndex = await source("examples/pages/index.html");
+for (const uiDefault of [
+  'id="max-width" type="number" min="1" max="8192" value="512"',
+  'id="max-height" type="number" min="1" max="8192" value="512"',
+  'name="fit" value="contain" checked',
+  'name="output" value="png" checked',
+  'id="png-color"',
+  '<option value="rgba8" selected>',
+  'id="jpeg-quality" type="number" min="1" max="100" value="85"',
+  'id="max-memory" type="number" min="1" max="256" value="32"',
+  'id="max-input-bytes" type="number" min="1" value="67108864"',
+  'id="max-input-width" type="number" min="1" value="100000"',
+  'id="max-input-height" type="number" min="1" value="100000"',
+  'id="max-input-pixels" type="number" min="1" value="500000000"',
+  'id="max-output-width" type="number" min="1" value="8192"',
+  'id="max-output-height" type="number" min="1" value="8192"',
+  'id="max-output-pixels" type="number" min="1" value="16777216"',
+]) {
+  requireText(pagesIndex, uiDefault, "examples/pages/index.html");
+}
+
+const pagesWorker = await source("examples/pages/worker.js");
+for (const publicCall of [
+  'from "./vendor/streamthumb_wasm.js"',
+  "planThumbnailPng",
+  "thumbnailPngToChunks",
+  "thumbnailPng",
+  "wasmMemoryBytes",
+]) {
+  requireText(pagesWorker, publicCall, "examples/pages/worker.js");
+}
+
 console.log("PASS: public WebAssembly API documentation and examples are aligned");

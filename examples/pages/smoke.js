@@ -1,0 +1,152 @@
+const status = document.querySelector("#status");
+const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+let nextRequestId = 1;
+
+function waitForReady() {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Worker initialization timed out.")), 15_000);
+    const onMessage = ({ data }) => {
+      if (data.type === "ready") {
+        clearTimeout(timeout);
+        worker.removeEventListener("message", onMessage);
+        resolve(data);
+      } else if (data.type === "failure" && data.stage === "initialization") {
+        clearTimeout(timeout);
+        worker.removeEventListener("message", onMessage);
+        reject(new Error(data.error));
+      }
+    };
+    worker.addEventListener("message", onMessage);
+  });
+}
+
+function run(input, options) {
+  return new Promise((resolve, reject) => {
+    const requestId = nextRequestId++;
+    let plan;
+    const timeout = setTimeout(() => reject(new Error(`Run ${requestId} timed out.`)), 15_000);
+    const onMessage = ({ data }) => {
+      if (data.requestId !== requestId) return;
+      if (data.type === "planned") {
+        plan = data.plan;
+        return;
+      }
+      if (data.type === "success" || data.type === "failure") {
+        clearTimeout(timeout);
+        worker.removeEventListener("message", onMessage);
+        resolve({ ...data, plan: data.plan ?? plan });
+      }
+    };
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", (event) => reject(new Error(event.message)), { once: true });
+    const transferred = input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength);
+    worker.postMessage({ type: "run", requestId, input: transferred, fileName: "sample.png", options }, [transferred]);
+  });
+}
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function waitFor(condition, message, timeoutMs = 15_000) {
+  const started = performance.now();
+  while (!condition()) {
+    if (performance.now() - started > timeoutMs) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function verifyPageUi() {
+  const frame = document.createElement("iframe");
+  frame.src = "./index.html";
+  frame.title = "Pages UI under test";
+  document.body.append(frame);
+  await new Promise((resolve, reject) => {
+    frame.addEventListener("load", resolve, { once: true });
+    setTimeout(() => reject(new Error("Pages UI frame did not load.")), 10_000);
+  });
+  const doc = frame.contentDocument;
+  const id = (value) => doc.getElementById(value);
+  await waitFor(() => id("status").dataset.ready === "true", "Pages UI worker did not become ready.");
+  id("sample-button").click();
+  await waitFor(() => id("result-label").textContent === "READY", "Bundled sample was not inspected.");
+
+  id("run-button").click();
+  await waitFor(() => id("result-label").textContent === "SUCCESS", "Default PNG UI run did not succeed.");
+  assert(!id("preview-image").hidden && id("preview-image").src.startsWith("blob:"), "PNG preview was not rendered from a Blob URL.");
+  assert(id("result-planned").textContent !== "—" && id("wasm-after").textContent !== "—", "Memory diagnostics were not rendered.");
+
+  doc.querySelector('input[name="output"][value="jpeg"]').click();
+  id("run-button").click();
+  await waitFor(() => id("result-label").textContent === "SUCCESS" && id("result-output").textContent.includes("JPEG"), "JPEG UI run did not succeed.");
+
+  doc.querySelector('input[name="output"][value="rgba"]').click();
+  id("run-button").click();
+  await waitFor(() => id("result-label").textContent === "SUCCESS" && !id("preview-canvas").hidden, "RGBA canvas preview was not rendered.");
+
+  id("allow-upscale").checked = true;
+  id("max-width").value = "512";
+  id("max-height").value = "512";
+  id("max-memory").value = "1";
+  id("run-button").click();
+  await waitFor(() => id("result-label").textContent === "FAILED", "The UI did not show the planned-memory rejection.");
+  assert(id("error-detail").textContent.includes("Required (planned)") && id("error-detail").textContent.includes("Configured limit"), "The UI omitted typed memory-limit values.");
+
+  id("max-memory").value = "32";
+  id("run-button").click();
+  await waitFor(() => id("result-label").textContent === "SUCCESS", "The UI did not recover after restoring the limit.");
+  frame.remove();
+}
+
+async function assertImage(bytes, mimeType, width, height) {
+  const bitmap = await createImageBitmap(new Blob([bytes], { type: mimeType }));
+  try {
+    assert(bitmap.width === width && bitmap.height === height, `Decoded ${bitmap.width}x${bitmap.height}; expected ${width}x${height}.`);
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function report(result, message) {
+  status.textContent = message;
+  await fetch("/pages-result", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ result, message }),
+  });
+}
+
+try {
+  const ready = await waitForReady();
+  assert(/^\d+\.\d+\.\d+/.test(ready.version), "Worker did not report a semantic version.");
+  const input = new Uint8Array(await fetch("./samples/pngsuite_basn6a08.png").then((response) => response.arrayBuffer()));
+
+  const png = await run(input, { maxWidth: 16, maxHeight: 16, output: "png", maxMemoryBytes: 32 * 1024 * 1024 });
+  assert(png.type === "success", `PNG run failed: ${png.error}`);
+  assert(png.plan.withinMemoryLimit, "PNG plan unexpectedly exceeded the memory limit.");
+  assert(Number.isFinite(png.plan.memory.totalBytes) && png.plan.memory.totalBytes > 0, "PNG plan did not contain finite memory.");
+  assert(Number.isFinite(png.timings.processingMs) && png.timings.processingMs >= 0, "PNG timing was invalid.");
+  assert(Number.isFinite(png.wasm.before) && Number.isFinite(png.wasm.after) && Number.isFinite(png.wasm.growth), "WASM memory observations were invalid.");
+  await assertImage(new Uint8Array(png.bytes), png.metadata.mimeType, 16, 16);
+
+  const rejected = await run(input, { maxWidth: 16, maxHeight: 16, output: "png", maxMemoryBytes: png.plan.memory.totalBytes - 1 });
+  assert(rejected.type === "failure" && rejected.stage === "configured limit rejection", "Low memory did not produce a typed rejection.");
+  assert(rejected.required === png.plan.memory.totalBytes, "Typed rejection reported the wrong required memory.");
+
+  const jpeg = await run(input, { maxWidth: 16, maxHeight: 16, output: "jpeg", maxMemoryBytes: 32 * 1024 * 1024 });
+  assert(jpeg.type === "success", `JPEG run failed: ${jpeg.error}`);
+  await assertImage(new Uint8Array(jpeg.bytes), jpeg.metadata.mimeType, 16, 16);
+
+  const rgba = await run(input, { maxWidth: 16, maxHeight: 16, output: "rgba", maxMemoryBytes: 32 * 1024 * 1024 });
+  assert(rgba.type === "success", `RGBA run failed: ${rgba.error}`);
+  assert(rgba.bytes.byteLength === 16 * 16 * 4, "RGBA output length was incorrect.");
+
+  const recovered = await run(input, { maxWidth: 8, maxHeight: 8, output: "png", maxMemoryBytes: 32 * 1024 * 1024 });
+  assert(recovered.type === "success", "A valid run did not recover after the limit rejection.");
+  await verifyPageUi();
+  await report("pass", "PASS: Pages UI and worker verified PNG, JPEG, RGBA, planning, limit rejection, previews, and recovery");
+} catch (error) {
+  await report("fail", String(error));
+} finally {
+  worker.terminate();
+}

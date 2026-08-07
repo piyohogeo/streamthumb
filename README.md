@@ -91,6 +91,11 @@ buffer-returning APIs remain available.
 
 ## WebAssembly
 
+Try the [live WebAssembly demo](https://piyohogeo.github.io/streamthumb/).
+Selected PNG files stay in the browser; a module worker displays the same
+conservative Rust memory plan used by execution before generating PNG, JPEG,
+or raw RGBA output.
+
 Build a browser-targeted package with:
 
 ```text
@@ -104,6 +109,7 @@ PNG or JPEG output synchronously in chunks of at most 64 KiB, avoiding a
 complete encoded result in WebAssembly memory. Both work without DOM, Canvas,
 filesystem, threads, or `SharedArrayBuffer` APIs. See [the WebAssembly API
 contract](docs/WASM_API.md) and the examples for [browsers](examples/browser),
+[GitHub Pages](examples/pages),
 [Node.js](examples/node), [Deno](examples/deno), and [Cloudflare
 Workers](examples/cloudflare-worker).
 
