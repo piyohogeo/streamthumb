@@ -16,6 +16,7 @@ pub struct MemoryEstimate {
     pub horizontal_accumulator_bytes: usize,
     pub vertical_accumulator_bytes: usize,
     pub sparse_accumulator_bytes: usize,
+    pub output_row_bytes: usize,
     pub output_rgba_bytes: usize,
     pub encoder_state_bytes: usize,
     pub encoded_output_bytes: usize,
@@ -73,6 +74,8 @@ pub fn estimate_working_memory_for_output(
         "vertical accumulator",
     )?;
     let sparse_accumulator_bytes = 0;
+    let output_row_bytes =
+        checked_product(&[output_width, NORMALIZED_PIXEL_BYTES], "output RGBA row")?;
     let output_rgba_bytes = checked_product(
         &[output_pixels, NORMALIZED_PIXEL_BYTES],
         "output RGBA buffer",
@@ -93,6 +96,7 @@ pub fn estimate_working_memory_for_output(
             horizontal_accumulator_bytes,
             vertical_accumulator_bytes,
             sparse_accumulator_bytes,
+            output_row_bytes,
             output_rgba_bytes,
             encoder_state_bytes,
             encoded_output_bytes,
@@ -107,6 +111,7 @@ pub fn estimate_working_memory_for_output(
         horizontal_accumulator_bytes,
         vertical_accumulator_bytes,
         sparse_accumulator_bytes,
+        output_row_bytes,
         output_rgba_bytes,
         encoder_state_bytes,
         encoded_output_bytes,
@@ -194,10 +199,11 @@ mod tests {
         assert_eq!(estimate.horizontal_accumulator_bytes, 8_000);
         assert_eq!(estimate.vertical_accumulator_bytes, 8_000);
         assert_eq!(estimate.sparse_accumulator_bytes, 0);
+        assert_eq!(estimate.output_row_bytes, 400);
         assert_eq!(estimate.output_rgba_bytes, 20_000);
         assert_eq!(estimate.encoder_state_bytes, 0);
         assert_eq!(estimate.encoded_output_bytes, 0);
-        assert_eq!(estimate.total_bytes, 215_843);
+        assert_eq!(estimate.total_bytes, 216_243);
     }
 
     #[test]

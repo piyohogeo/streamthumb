@@ -7,6 +7,81 @@ pub struct RgbaImage {
     pub pixels: Vec<u8>,
 }
 
+/// Consumes completed straight-alpha RGBA8 thumbnail rows.
+///
+/// Rows are delivered exactly once in ascending order. The row slice is valid
+/// only for the duration of `push_row` and must be copied if the sink needs to
+/// retain it.
+pub trait RgbaRowSink {
+    type Output;
+    type Error: From<Error>;
+
+    fn push_row(&mut self, y: u32, rgba: &[u8]) -> core::result::Result<(), Self::Error>;
+    fn finish(self) -> core::result::Result<Self::Output, Self::Error>;
+}
+
+/// Collects completed RGBA8 rows into a full bounded image.
+///
+/// This sink preserves the existing raw-RGBA behavior while making full-frame
+/// output storage an explicit choice.
+#[derive(Debug)]
+pub struct RgbaCollector {
+    dimensions: Dimensions,
+    next_y: u32,
+    pixels: Vec<u8>,
+}
+
+impl RgbaCollector {
+    pub fn new(dimensions: Dimensions) -> Result<Self> {
+        let output_bytes = rgba_image_bytes(dimensions, "RGBA collector")?;
+        Ok(Self {
+            dimensions,
+            next_y: 0,
+            pixels: allocate_bytes(output_bytes)?,
+        })
+    }
+}
+
+impl RgbaRowSink for RgbaCollector {
+    type Output = RgbaImage;
+    type Error = Error;
+
+    fn push_row(&mut self, y: u32, rgba: &[u8]) -> Result<()> {
+        if y != self.next_y {
+            return Err(Error::UnexpectedRow {
+                expected: self.next_y,
+                actual: y,
+            });
+        }
+        let expected_len = rgba_row_bytes(self.dimensions.width, "RGBA collector row")?;
+        if rgba.len() != expected_len {
+            return Err(Error::InvalidRowLength {
+                expected: expected_len,
+                actual: rgba.len(),
+            });
+        }
+        self.pixels.extend_from_slice(rgba);
+        self.next_y = self
+            .next_y
+            .checked_add(1)
+            .ok_or_else(|| overflow("RGBA collector row index"))?;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<RgbaImage> {
+        if self.next_y != self.dimensions.height {
+            return Err(Error::IncompleteImage {
+                expected_rows: self.dimensions.height,
+                actual_rows: self.next_y,
+            });
+        }
+        Ok(RgbaImage {
+            dimensions: self.dimensions,
+            pixels: self.pixels,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Accumulator {
     red: u128,
@@ -21,14 +96,15 @@ struct Accumulator {
 /// Source rows must be pushed once in ascending order. Memory use depends on
 /// source width and output size, but not on source height.
 #[derive(Debug)]
-pub struct AreaDownsampler {
+pub struct AreaDownsampler<S = RgbaCollector> {
     source: Dimensions,
     output: Dimensions,
     next_source_y: u32,
     current_output_y: u32,
     horizontal: Vec<Accumulator>,
     vertical: Vec<Accumulator>,
-    output_pixels: Vec<u8>,
+    output_row: Vec<u8>,
+    sink: S,
 }
 
 /// An exact area downsampler that accepts source pixels in arbitrary order.
@@ -132,60 +208,66 @@ impl SparseAreaDownsampler {
 
     /// Completes the thumbnail after every source pixel has been supplied.
     pub fn finish(self) -> Result<RgbaImage> {
+        let sink = RgbaCollector::new(self.output)?;
+        self.finish_into(sink)
+    }
+
+    /// Emits completed rows after every sparse source sample has arrived.
+    pub fn finish_into<S>(self, mut sink: S) -> core::result::Result<S::Output, S::Error>
+    where
+        S: RgbaRowSink,
+    {
         let expected_samples = self.source.pixels()?;
         if self.samples_received != expected_samples {
             return Err(Error::IncompleteSamples {
                 expected: expected_samples,
                 actual: self.samples_received,
-            });
+            }
+            .into());
         }
 
-        let output_bytes = usize::try_from(self.output.pixels()?)
-            .map_err(|_| overflow("sparse output byte count conversion"))?
-            .checked_mul(4)
-            .ok_or_else(|| overflow("sparse output RGBA byte count"))?;
-        let mut pixels = allocate_bytes(output_bytes)?;
+        let output_width = usize::try_from(self.output.width)
+            .map_err(|_| overflow("sparse output width conversion"))?;
+        let output_row_bytes = rgba_row_bytes(self.output.width, "sparse output row")?;
+        let mut output_row = allocate_initialized_bytes(output_row_bytes)?;
         let expected_weight = u128::from(self.source.width) * u128::from(self.source.height);
-        for (index, accumulator) in self.accumulators.iter().enumerate() {
-            if accumulator.weight != expected_weight {
-                let output_width = usize::try_from(self.output.width)
-                    .map_err(|_| overflow("sparse output width conversion"))?;
-                return Err(Error::InvalidCoverage {
-                    x: u32::try_from(index % output_width)
-                        .map_err(|_| overflow("sparse coverage x conversion"))?,
-                    y: u32::try_from(index / output_width)
-                        .map_err(|_| overflow("sparse coverage y conversion"))?,
-                    expected: expected_weight,
-                    actual: accumulator.weight,
-                });
+        for (y, accumulators) in self.accumulators.chunks_exact(output_width).enumerate() {
+            let y = u32::try_from(y).map_err(|_| overflow("sparse output y conversion"))?;
+            for (x, accumulator) in accumulators.iter().enumerate() {
+                if accumulator.weight != expected_weight {
+                    return Err(Error::InvalidCoverage {
+                        x: u32::try_from(x)
+                            .map_err(|_| overflow("sparse coverage x conversion"))?,
+                        y,
+                        expected: expected_weight,
+                        actual: accumulator.weight,
+                    }
+                    .into());
+                }
+                write_normalized_pixel(&mut output_row, x, accumulator)?;
             }
-            let alpha = rounded_div(accumulator.alpha, accumulator.weight)?;
-            let (red, green, blue) = if accumulator.alpha == 0 {
-                (0, 0, 0)
-            } else {
-                (
-                    rounded_div(accumulator.red, accumulator.alpha)?,
-                    rounded_div(accumulator.green, accumulator.alpha)?,
-                    rounded_div(accumulator.blue, accumulator.alpha)?,
-                )
-            };
-            pixels.extend_from_slice(&[to_u8(red)?, to_u8(green)?, to_u8(blue)?, to_u8(alpha)?]);
+            sink.push_row(y, &output_row)?;
         }
-        Ok(RgbaImage {
-            dimensions: self.output,
-            pixels,
-        })
+        sink.finish()
     }
 }
 
-impl AreaDownsampler {
+impl AreaDownsampler<RgbaCollector> {
     /// Creates an area downsampler for fixed source and output dimensions.
     pub fn new(source: Dimensions, output: Dimensions) -> Result<Self> {
+        let sink = RgbaCollector::new(output)?;
+        Self::with_sink(source, output, sink)
+    }
+}
+
+impl<S> AreaDownsampler<S>
+where
+    S: RgbaRowSink,
+{
+    /// Creates an area downsampler that emits rows to the supplied sink.
+    pub fn with_sink(source: Dimensions, output: Dimensions, sink: S) -> Result<Self> {
         let output_width = usize::try_from(output.width).map_err(|_| overflow("output width"))?;
-        let output_bytes = usize::try_from(output.pixels()?)
-            .map_err(|_| overflow("output pixel count conversion"))?
-            .checked_mul(4)
-            .ok_or_else(|| overflow("output RGBA byte count"))?;
+        let output_row_bytes = rgba_row_bytes(output.width, "output row")?;
 
         Ok(Self {
             source,
@@ -194,17 +276,19 @@ impl AreaDownsampler {
             current_output_y: 0,
             horizontal: allocate_accumulators(output_width)?,
             vertical: allocate_accumulators(output_width)?,
-            output_pixels: allocate_bytes(output_bytes)?,
+            output_row: allocate_initialized_bytes(output_row_bytes)?,
+            sink,
         })
     }
 
     /// Adds the next normalized straight-alpha RGBA8 source row.
-    pub fn push_row(&mut self, y: u32, pixels: &[u8]) -> Result<()> {
+    pub fn push_row(&mut self, y: u32, pixels: &[u8]) -> core::result::Result<(), S::Error> {
         if y != self.next_source_y {
             return Err(Error::UnexpectedRow {
                 expected: self.next_source_y,
                 actual: y,
-            });
+            }
+            .into());
         }
         let expected_len = usize::try_from(self.source.width)
             .map_err(|_| overflow("source width"))?
@@ -214,7 +298,8 @@ impl AreaDownsampler {
             return Err(Error::InvalidRowLength {
                 expected: expected_len,
                 actual: pixels.len(),
-            });
+            }
+            .into());
         }
 
         self.reduce_horizontal(pixels)?;
@@ -226,22 +311,20 @@ impl AreaDownsampler {
         Ok(())
     }
 
-    /// Completes all output rows and returns the thumbnail buffer.
-    pub fn finish(mut self) -> Result<RgbaImage> {
+    /// Completes all output rows and finishes the configured sink.
+    pub fn finish(mut self) -> core::result::Result<S::Output, S::Error> {
         if self.next_source_y != self.source.height {
             return Err(Error::IncompleteImage {
                 expected_rows: self.source.height,
                 actual_rows: self.next_source_y,
-            });
+            }
+            .into());
         }
         while self.current_output_y < self.output.height {
             self.finalize_output_row()?;
         }
 
-        Ok(RgbaImage {
-            dimensions: self.output,
-            pixels: self.output_pixels,
-        })
+        self.sink.finish()
     }
 
     fn reduce_horizontal(&mut self, pixels: &[u8]) -> Result<()> {
@@ -291,7 +374,7 @@ impl AreaDownsampler {
         Ok(())
     }
 
-    fn accumulate_vertical(&mut self, source_y: u32) -> Result<()> {
+    fn accumulate_vertical(&mut self, source_y: u32) -> core::result::Result<(), S::Error> {
         let source_height = u64::from(self.source.height);
         let output_height = u64::from(self.output.height);
         let source_start = u64::from(source_y)
@@ -329,11 +412,14 @@ impl AreaDownsampler {
                 vertical.alpha += horizontal.alpha * overlap;
                 vertical.weight += horizontal.weight * overlap;
             }
+            if source_end >= output_end {
+                self.finalize_output_row()?;
+            }
         }
         Ok(())
     }
 
-    fn finalize_output_row(&mut self) -> Result<()> {
+    fn finalize_output_row(&mut self) -> core::result::Result<(), S::Error> {
         let expected_weight = u128::from(self.source.width) * u128::from(self.source.height);
         for (x, accumulator) in self.vertical.iter().enumerate() {
             if accumulator.weight != expected_weight {
@@ -342,25 +428,13 @@ impl AreaDownsampler {
                     y: self.current_output_y,
                     expected: expected_weight,
                     actual: accumulator.weight,
-                });
+                }
+                .into());
             }
-            let alpha = rounded_div(accumulator.alpha, accumulator.weight)?;
-            let (red, green, blue) = if accumulator.alpha == 0 {
-                (0, 0, 0)
-            } else {
-                (
-                    rounded_div(accumulator.red, accumulator.alpha)?,
-                    rounded_div(accumulator.green, accumulator.alpha)?,
-                    rounded_div(accumulator.blue, accumulator.alpha)?,
-                )
-            };
-            self.output_pixels.extend_from_slice(&[
-                to_u8(red)?,
-                to_u8(green)?,
-                to_u8(blue)?,
-                to_u8(alpha)?,
-            ]);
+            write_normalized_pixel(&mut self.output_row, x, accumulator)?;
         }
+        self.sink
+            .push_row(self.current_output_y, &self.output_row)?;
         self.vertical.fill(Accumulator::default());
         self.current_output_y = self
             .current_output_y
@@ -368,6 +442,48 @@ impl AreaDownsampler {
             .ok_or_else(|| overflow("output row index"))?;
         Ok(())
     }
+}
+
+fn write_normalized_pixel(
+    output_row: &mut [u8],
+    x: usize,
+    accumulator: &Accumulator,
+) -> Result<()> {
+    let alpha = rounded_div(accumulator.alpha, accumulator.weight)?;
+    let (red, green, blue) = if accumulator.alpha == 0 {
+        (0, 0, 0)
+    } else {
+        (
+            rounded_div(accumulator.red, accumulator.alpha)?,
+            rounded_div(accumulator.green, accumulator.alpha)?,
+            rounded_div(accumulator.blue, accumulator.alpha)?,
+        )
+    };
+    let offset = x
+        .checked_mul(4)
+        .ok_or_else(|| overflow("normalized output pixel offset"))?;
+    let end = offset
+        .checked_add(4)
+        .ok_or_else(|| overflow("normalized output pixel end"))?;
+    let pixel = output_row
+        .get_mut(offset..end)
+        .ok_or_else(|| overflow("normalized output row access"))?;
+    pixel.copy_from_slice(&[to_u8(red)?, to_u8(green)?, to_u8(blue)?, to_u8(alpha)?]);
+    Ok(())
+}
+
+fn rgba_row_bytes(width: u32, operation: &'static str) -> Result<usize> {
+    usize::try_from(width)
+        .map_err(|_| overflow(operation))?
+        .checked_mul(4)
+        .ok_or_else(|| overflow(operation))
+}
+
+fn rgba_image_bytes(dimensions: Dimensions, operation: &'static str) -> Result<usize> {
+    usize::try_from(dimensions.pixels()?)
+        .map_err(|_| overflow(operation))?
+        .checked_mul(4)
+        .ok_or_else(|| overflow(operation))
 }
 
 fn allocate_accumulators(len: usize) -> Result<Vec<Accumulator>> {
@@ -387,6 +503,12 @@ fn allocate_bytes(capacity: usize) -> Result<Vec<u8>> {
     bytes
         .try_reserve_exact(capacity)
         .map_err(|_| Error::AllocationFailed { bytes: capacity })?;
+    Ok(bytes)
+}
+
+fn allocate_initialized_bytes(len: usize) -> Result<Vec<u8>> {
+    let mut bytes = allocate_bytes(len)?;
+    bytes.resize(len, 0);
     Ok(bytes)
 }
 
@@ -427,7 +549,77 @@ const fn overflow(operation: &'static str) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
     use super::*;
+
+    type RecordedRow = (u32, Vec<u8>);
+    type SharedRows = Rc<RefCell<Vec<RecordedRow>>>;
+
+    #[derive(Debug)]
+    struct RecordingSink {
+        row_bytes: usize,
+        next_y: u32,
+        rows: SharedRows,
+    }
+
+    impl RecordingSink {
+        fn new(output: Dimensions) -> (Self, SharedRows) {
+            let rows = Rc::new(RefCell::new(Vec::new()));
+            (
+                Self {
+                    row_bytes: usize::try_from(output.width).unwrap() * 4,
+                    next_y: 0,
+                    rows: Rc::clone(&rows),
+                },
+                rows,
+            )
+        }
+    }
+
+    impl RgbaRowSink for RecordingSink {
+        type Output = Vec<(u32, Vec<u8>)>;
+        type Error = Error;
+
+        fn push_row(&mut self, y: u32, rgba: &[u8]) -> Result<()> {
+            assert_eq!(y, self.next_y);
+            assert_eq!(rgba.len(), self.row_bytes);
+            self.rows.borrow_mut().push((y, rgba.to_vec()));
+            self.next_y += 1;
+            Ok(())
+        }
+
+        fn finish(self) -> Result<Self::Output> {
+            Ok(self.rows.borrow().clone())
+        }
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    enum SinkTestError {
+        Core(Error),
+        Rejected,
+    }
+
+    impl From<Error> for SinkTestError {
+        fn from(error: Error) -> Self {
+            Self::Core(error)
+        }
+    }
+
+    struct RejectingSink;
+
+    impl RgbaRowSink for RejectingSink {
+        type Output = ();
+        type Error = SinkTestError;
+
+        fn push_row(&mut self, _y: u32, _rgba: &[u8]) -> core::result::Result<(), Self::Error> {
+            Err(SinkTestError::Rejected)
+        }
+
+        fn finish(self) -> core::result::Result<(), Self::Error> {
+            Ok(())
+        }
+    }
 
     fn resize(source: Dimensions, output: Dimensions, pixels: &[u8]) -> RgbaImage {
         let mut downsampler = AreaDownsampler::new(source, output).unwrap();
@@ -453,6 +645,105 @@ mod tests {
             }
         }
         downsampler.finish().unwrap()
+    }
+
+    fn recorded_pixels(rows: &[(u32, Vec<u8>)]) -> Vec<u8> {
+        rows.iter()
+            .flat_map(|(_, row)| row.iter().copied())
+            .collect()
+    }
+
+    #[test]
+    fn ordered_downsampler_emits_completed_rows_once_in_order() {
+        let source = Dimensions::new(4, 4).unwrap();
+        let output = Dimensions::new(2, 2).unwrap();
+        let pixels = (0..source.pixels().unwrap() * 4)
+            .map(|value| u8::try_from(value % 251).unwrap())
+            .collect::<Vec<_>>();
+        let expected = resize(source, output, &pixels);
+        let (sink, observed) = RecordingSink::new(output);
+        let mut downsampler = AreaDownsampler::with_sink(source, output, sink).unwrap();
+        let row_bytes = usize::try_from(source.width).unwrap() * 4;
+
+        for (y, row) in pixels.chunks_exact(row_bytes).enumerate() {
+            downsampler
+                .push_row(u32::try_from(y).unwrap(), row)
+                .unwrap();
+            if y == 1 {
+                assert_eq!(observed.borrow().len(), 1);
+            }
+        }
+
+        let rows = downsampler.finish().unwrap();
+        assert_eq!(rows.iter().map(|(y, _)| *y).collect::<Vec<_>>(), [0, 1]);
+        assert!(rows.iter().all(|(_, row)| row.len() == 2 * 4));
+        assert_eq!(recorded_pixels(&rows), expected.pixels);
+    }
+
+    #[test]
+    fn sparse_downsampler_finishes_into_rows_equivalent_to_collected_output() {
+        let source = Dimensions::new(3, 3).unwrap();
+        let output = Dimensions::new(2, 2).unwrap();
+        let pixels = (0..source.pixels().unwrap() * 4)
+            .map(|value| u8::try_from((value * 17) % 256).unwrap())
+            .collect::<Vec<_>>();
+        let expected = resize_sparse(source, output, &pixels);
+        let mut downsampler = SparseAreaDownsampler::new(source, output).unwrap();
+        for y in (0..source.height).rev() {
+            for x in (0..source.width).rev() {
+                let offset =
+                    usize::try_from((u64::from(y) * u64::from(source.width) + u64::from(x)) * 4)
+                        .unwrap();
+                downsampler
+                    .push_pixel(x, y, pixels[offset..offset + 4].try_into().unwrap())
+                    .unwrap();
+            }
+        }
+        let (sink, observed) = RecordingSink::new(output);
+        assert!(observed.borrow().is_empty());
+        let rows = downsampler.finish_into(sink).unwrap();
+
+        assert_eq!(rows.iter().map(|(y, _)| *y).collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(recorded_pixels(&rows), expected.pixels);
+    }
+
+    #[test]
+    fn rgba_collector_validates_row_contract() {
+        let dimensions = Dimensions::new(2, 2).unwrap();
+        let mut collector = RgbaCollector::new(dimensions).unwrap();
+        assert_eq!(
+            collector.push_row(1, &[0; 8]),
+            Err(Error::UnexpectedRow {
+                expected: 0,
+                actual: 1
+            })
+        );
+        assert_eq!(
+            collector.push_row(0, &[0; 7]),
+            Err(Error::InvalidRowLength {
+                expected: 8,
+                actual: 7
+            })
+        );
+        collector.push_row(0, &[1; 8]).unwrap();
+        assert_eq!(
+            collector.finish(),
+            Err(Error::IncompleteImage {
+                expected_rows: 2,
+                actual_rows: 1
+            })
+        );
+    }
+
+    #[test]
+    fn ordered_downsampler_preserves_sink_errors() {
+        let dimensions = Dimensions::new(1, 1).unwrap();
+        let mut downsampler =
+            AreaDownsampler::with_sink(dimensions, dimensions, RejectingSink).unwrap();
+        assert_eq!(
+            downsampler.push_row(0, &[1, 2, 3, 4]),
+            Err(SinkTestError::Rejected)
+        );
     }
 
     #[test]

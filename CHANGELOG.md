@@ -26,3 +26,5 @@ project follows Semantic Versioning.
   procedure for the npm package and attached GitHub assets.
 - A design-completion traceability audit, documented color-space limitations,
   and expanded WebAssembly boundary tests for RGBA output and invalid options.
+- A codec-independent RGBA row-sink architecture with a compatibility
+  collector, immediate ordered-row emission, and row-wise Adam7 finalization.

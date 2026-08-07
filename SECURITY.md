@@ -6,7 +6,7 @@
 
 The current implementation checks encoded input bytes before parsing and checks dimensions, source pixels, output dimensions, output pixels, and estimated working memory after IHDR and before IDAT decoding. The PNG decoder also receives its own allocation allowance. Encoded PNG output is written through a bounded writer.
 
-The working-memory budget covers decoder rows and staging, normalized source-row storage, ordered-row or Adam7 sparse area accumulators, output RGBA storage, encoder state, and bounded encoded output. It does not include:
+The working-memory budget covers decoder rows and staging, normalized source-row storage, one reusable completed output row, ordered-row or Adam7 sparse area accumulators, output RGBA storage where retained by the selected sink, encoder state, and bounded encoded output. It does not include:
 
 - the caller-owned encoded input buffer;
 - JavaScript memory outside WebAssembly;

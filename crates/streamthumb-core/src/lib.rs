@@ -21,4 +21,4 @@ pub use memory::{
 };
 pub use options::{Filter, Fit, OutputFormat, ThumbnailOptions};
 pub use plan::{InputInfo, ProcessingPlan, ThumbnailInfo, plan_thumbnail, plan_thumbnail_sparse};
-pub use resample::{AreaDownsampler, RgbaImage, SparseAreaDownsampler};
+pub use resample::{AreaDownsampler, RgbaCollector, RgbaImage, RgbaRowSink, SparseAreaDownsampler};

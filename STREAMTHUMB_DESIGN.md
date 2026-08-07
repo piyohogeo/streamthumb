@@ -1245,3 +1245,12 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 2. The public contract now states that resampling averages encoded sample values, does not convert sRGB to linear light, ignores color-management metadata, and does not copy that metadata to encoded PNG output.
 3. Dedicated-worker WebAssembly tests cover raw RGBA output, input and working-memory limit rejection, numeric validation, boolean validation, and every supported string-literal option boundary.
 4. Cloudflare live validation and Safari automation remain deferred. These external gaps do not change the runtime-neutral package architecture or the tested Chrome, Firefox, Node.js, and Deno contract.
+
+### Phase 24 decisions
+
+1. The streaming-output extension begins with a codec-independent `RgbaRowSink` trait whose associated output and error types allow future encoder sinks to preserve codec-specific failures while accepting core resampling errors.
+2. `AreaDownsampler` uses `RgbaCollector` as its default generic sink, preserving the existing constructor, row input, and `RgbaImage` result for current callers. Custom sinks use `AreaDownsampler::with_sink`.
+3. Ordered input emits each completed output row immediately. `SparseAreaDownsampler::finish_into` retains Adam7's output-sized accumulators until every sample arrives and then emits normalized rows in ascending order without first creating an additional RGBA frame.
+4. `RgbaCollector` makes full output-frame retention an explicit sink behavior. It validates row order, row length, and completeness before returning the existing `RgbaImage` representation.
+5. `MemoryEstimate` now exposes and counts one reusable `output_row_bytes` buffer. The complete `output_rgba_bytes` estimate remains unchanged for PNG and RGBA because the current high-level PNG path intentionally continues through the collector until the separate streaming-encoder phase.
+6. This phase does not change PNG encoding, public Rust/WASM thumbnail behavior, codec options, or dependencies. JPEG remains deferred until row-streamed PNG encoding is independently complete and measured.

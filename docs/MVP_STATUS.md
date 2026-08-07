@@ -27,10 +27,26 @@ Version 0.1.0 also supports Adam7, every standard PNG color type and legal bit
 depth, applicable palette/grayscale/RGB `tRNS` transparency, raw RGBA output,
 strict TypeScript declarations, and reproducible release-candidate artifacts.
 
+## Streaming output extension status
+
+The first architecture stage from `STREAMTHUMB_STREAMING_OUTPUT_HANDOFF.md` is
+complete. `RgbaRowSink` separates completed thumbnail rows from resampling,
+`RgbaCollector` preserves the existing full-image API, ordered input emits rows
+as soon as their coverage is complete, and Adam7 output can be emitted row by
+row after sparse accumulation finishes.
+
+This stage does not yet reduce the high-level encoded PNG path's memory use.
+That path intentionally continues through `RgbaCollector` until the streaming
+PNG encoder is implemented independently. The memory estimate therefore still
+includes the complete output RGBA image and now exposes the additional reusable
+`output_row_bytes` buffer explicitly.
+
 ## Explicit limitations and deferred work
 
 - APNG, JPEG, WebP, AVIF, general transformations, additional filters, and an
-  incremental JavaScript input API remain out of scope.
+  incremental JavaScript input API are not currently implemented. JPEG output
+  is planned only after the row-streamed PNG path and its memory evidence are
+  complete.
 - Resampling averages encoded color samples. It does not perform linear-light
   conversion or ICC color management, and encoded output does not inherit PNG
   color metadata.

@@ -34,9 +34,9 @@ pub enum Error {
     },
     /// Checked arithmetic failed while calculating resource requirements.
     IntegerOverflow { operation: &'static str },
-    /// A source row arrived out of order.
+    /// An RGBA row arrived out of order.
     UnexpectedRow { expected: u32, actual: u32 },
-    /// A normalized source row had the wrong byte length.
+    /// A normalized RGBA row had the wrong byte length.
     InvalidRowLength { expected: usize, actual: usize },
     /// A sparse source sample was outside the declared source dimensions.
     InvalidPixelCoordinate { x: u32, y: u32 },
@@ -83,10 +83,7 @@ impl fmt::Display for Error {
                 write!(formatter, "integer overflow while calculating {operation}")
             }
             Self::UnexpectedRow { expected, actual } => {
-                write!(
-                    formatter,
-                    "expected source row {expected}, received {actual}"
-                )
+                write!(formatter, "expected row {expected}, received {actual}")
             }
             Self::InvalidRowLength { expected, actual } => write!(
                 formatter,
