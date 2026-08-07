@@ -151,6 +151,31 @@ reserving past its encoded-output cap, avoiding repeated exact reallocations on
 large high-entropy output. These measurements are illustrative rather than
 stable performance thresholds.
 
+## Seekable native input comparison
+
+The production `Read + Seek` path was compared with the existing slice-input
+direct writer on a 2,048 x 2,048 deterministic high-entropy PNG. The encoded
+input was 13.78 MiB and output dimensions remained 2,048 x 2,048. Reader and
+slice-writer outputs were byte-for-byte identical for both codecs.
+
+| Codec input path | Runtime | Peak RSS | Encoded output |
+| --- | ---: | ---: | ---: |
+| Slice + direct PNG writer | 842.0 ms | 18.38 MiB | 13.78 MiB |
+| Seekable reader + direct PNG writer | 834.8 ms | 4.63 MiB | 13.78 MiB |
+| Slice + direct JPEG writer | 307.1 ms | 18.10 MiB | 3.32 MiB |
+| Seekable reader + direct JPEG writer | 289.5 ms | 4.36 MiB | 3.32 MiB |
+
+The seekable path reduced measured Peak RSS by 13.75 MiB for both codecs,
+closely matching the retained encoded input size. Runtime is not a direct
+comparison: reader timing includes file reads, while slice methods preload the
+input before their timer starts. The PNG difference also shows normal
+single-run variation and filesystem-cache effects.
+
+The same byte-for-byte checks passed for the Adam7 2,048-square blank and
+8,192 x 64 gradient corpus cases. Their encoded inputs were only 24.6 KiB and
+88.4 KiB, so input retention was not a material part of Peak RSS; the large
+square Adam7 case remained dominated by its bounded sparse output accumulator.
+
 ## Native results
 
 | Input | Method | Encoded input | Runtime | Peak RSS | Output |

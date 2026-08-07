@@ -23,7 +23,7 @@ cargo build --release --manifest-path benchmarks/Cargo.toml
 
 for input_file in "$corpus_directory"/*.png; do
   base_name="$(basename "$input_file" .png)"
-  for method in streamthumb-png streamthumb-jpeg streamthumb-writer-png streamthumb-writer-jpeg streamthumb-cover-png streamthumb-cover-jpeg image-rs; do
+  for method in streamthumb-png streamthumb-jpeg streamthumb-writer-png streamthumb-writer-jpeg streamthumb-reader-png streamthumb-reader-jpeg streamthumb-cover-png streamthumb-cover-jpeg image-rs; do
     extension="png"
     if [[ "$method" = *jpeg ]]; then extension="jpg"; fi
     output_file="$results_directory/$base_name-$method.$extension"
@@ -35,6 +35,10 @@ for input_file in "$corpus_directory"/*.png; do
     python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); r.update(peak_rss_bytes=int(sys.argv[2])*1024, platform="linux"); print(json.dumps(r,separators=(",",":")))' "$stdout_file" "$peak_kib" >> "$result_file"
     rm -f "$stdout_file" "$time_file"
   done
+  cmp "$results_directory/$base_name-streamthumb-writer-png.png" \
+    "$results_directory/$base_name-streamthumb-reader-png.png"
+  cmp "$results_directory/$base_name-streamthumb-writer-jpeg.jpg" \
+    "$results_directory/$base_name-streamthumb-reader-jpeg.jpg"
 done
 
 echo "$result_file"

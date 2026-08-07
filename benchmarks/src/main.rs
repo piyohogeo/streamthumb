@@ -1,7 +1,7 @@
 use std::env;
 use std::error::Error;
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 use std::time::Instant;
 
@@ -9,7 +9,9 @@ use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat};
 use streamthumb_core::{Dimensions, Fit, OutputFormat, ThumbnailOptions, contain_dimensions};
 use streamthumb_png::{
-    JpegOptions, PngOptions, ThumbnailOutput, thumbnail_jpeg_to_writer_with_options, thumbnail_png,
+    JpegOptions, PngOptions, ThumbnailOutput, thumbnail_jpeg_from_reader_to_writer_with_options,
+    thumbnail_jpeg_to_writer_with_options, thumbnail_png,
+    thumbnail_png_from_reader_to_writer_with_encoder_options,
     thumbnail_png_to_writer_with_encoder_options,
 };
 
@@ -141,7 +143,7 @@ fn main() -> Result<()> {
                 "usage:\n  streamthumb-benchmarks generate-smoke <directory>\n  \
                  streamthumb-benchmarks generate-memory <directory>\n  \
                  streamthumb-benchmarks generate-adam7 <directory>\n  \
-                 streamthumb-benchmarks run <streamthumb-png|streamthumb-jpeg|streamthumb-writer-png|streamthumb-writer-jpeg|streamthumb-cover-png|streamthumb-cover-jpeg|image-rs> <input> <output> <max-dimension>"
+                 streamthumb-benchmarks run <streamthumb-png|streamthumb-jpeg|streamthumb-writer-png|streamthumb-writer-jpeg|streamthumb-reader-png|streamthumb-reader-jpeg|streamthumb-cover-png|streamthumb-cover-jpeg|image-rs> <input> <output> <max-dimension>"
             );
             Err("invalid benchmark arguments".into())
         }
@@ -313,52 +315,89 @@ fn run_method(method: &str, input: &Path, output: &Path, max_dimension: u32) -> 
     if max_dimension == 0 {
         return Err("max-dimension must be positive".into());
     }
-    let input_bytes = fs::read(input)?;
+    let encoded_input_bytes = fs::metadata(input)?.len();
+    let input_bytes = if matches!(method, "streamthumb-reader-png" | "streamthumb-reader-jpeg") {
+        None
+    } else {
+        Some(fs::read(input)?)
+    };
     let started = Instant::now();
     let (source_width, source_height, output_width, output_height, output_bytes) = match method {
         "streamthumb" | "streamthumb-png" => run_streamthumb(
-            &input_bytes,
+            input_bytes
+                .as_deref()
+                .expect("buffered method must load input"),
             output,
             max_dimension,
             OutputFormat::Png,
             Fit::Contain,
         )?,
         "streamthumb-jpeg" => run_streamthumb(
-            &input_bytes,
+            input_bytes
+                .as_deref()
+                .expect("buffered method must load input"),
             output,
             max_dimension,
             OutputFormat::Jpeg,
             Fit::Contain,
         )?,
         "streamthumb-writer-png" => run_streamthumb_writer(
-            &input_bytes,
+            input_bytes
+                .as_deref()
+                .expect("buffered method must load input"),
             output,
             max_dimension,
             OutputFormat::Png,
             Fit::Contain,
         )?,
         "streamthumb-writer-jpeg" => run_streamthumb_writer(
-            &input_bytes,
+            input_bytes
+                .as_deref()
+                .expect("buffered method must load input"),
             output,
             max_dimension,
             OutputFormat::Jpeg,
             Fit::Contain,
         )?,
+        "streamthumb-reader-png" => run_streamthumb_reader(
+            input,
+            output,
+            max_dimension,
+            OutputFormat::Png,
+            encoded_input_bytes,
+        )?,
+        "streamthumb-reader-jpeg" => run_streamthumb_reader(
+            input,
+            output,
+            max_dimension,
+            OutputFormat::Jpeg,
+            encoded_input_bytes,
+        )?,
         "streamthumb-cover-png" => run_streamthumb(
-            &input_bytes,
+            input_bytes
+                .as_deref()
+                .expect("buffered method must load input"),
             output,
             max_dimension,
             OutputFormat::Png,
             Fit::Cover,
         )?,
         "streamthumb-cover-jpeg" => run_streamthumb(
-            &input_bytes,
+            input_bytes
+                .as_deref()
+                .expect("buffered method must load input"),
             output,
             max_dimension,
             OutputFormat::Jpeg,
             Fit::Cover,
         )?,
-        "image-rs" => run_image_rs(&input_bytes, output, max_dimension)?,
+        "image-rs" => run_image_rs(
+            input_bytes
+                .as_deref()
+                .expect("buffered method must load input"),
+            output,
+            max_dimension,
+        )?,
         _ => return Err(format!("unsupported benchmark method: {method}").into()),
     };
     let elapsed = started.elapsed();
@@ -366,7 +405,7 @@ fn run_method(method: &str, input: &Path, output: &Path, max_dimension: u32) -> 
         "{{\"method\":\"{}\",\"input\":\"{}\",\"encoded_input_bytes\":{},\"source_width\":{},\"source_height\":{},\"output_width\":{},\"output_height\":{},\"runtime_ms\":{:.3},\"output_bytes\":{}}}",
         method,
         json_escape(&input.display().to_string()),
-        input_bytes.len(),
+        encoded_input_bytes,
         source_width,
         source_height,
         output_width,
@@ -375,6 +414,49 @@ fn run_method(method: &str, input: &Path, output: &Path, max_dimension: u32) -> 
         output_bytes
     );
     Ok(())
+}
+
+fn run_streamthumb_reader(
+    input: &Path,
+    output: &Path,
+    max_dimension: u32,
+    format: OutputFormat,
+    encoded_input_bytes: u64,
+) -> Result<(u32, u32, u32, u32, u64)> {
+    let mut options = ThumbnailOptions {
+        max_width: max_dimension,
+        max_height: max_dimension,
+        output: format,
+        fit: Fit::Contain,
+        ..ThumbnailOptions::default()
+    };
+    options.limits.max_input_bytes = encoded_input_bytes.saturating_add(1);
+    options.limits.max_working_memory_bytes = 512 * 1024 * 1024;
+    let (source_width, source_height) = png_file_dimensions(input)?;
+    let reader = File::open(input)?;
+    let writer = BufWriter::new(File::create(output)?);
+    let info = match format {
+        OutputFormat::Png => thumbnail_png_from_reader_to_writer_with_encoder_options(
+            reader,
+            &options,
+            &PngOptions::default(),
+            writer,
+        )?,
+        OutputFormat::Jpeg => thumbnail_jpeg_from_reader_to_writer_with_options(
+            reader,
+            &options,
+            &JpegOptions::default(),
+            writer,
+        )?,
+        OutputFormat::Rgba => return Err("reader benchmark requires encoded output".into()),
+    };
+    Ok((
+        source_width,
+        source_height,
+        info.width,
+        info.height,
+        fs::metadata(output)?.len(),
+    ))
 }
 
 fn run_streamthumb_writer(
@@ -488,6 +570,12 @@ fn png_dimensions(input: &[u8]) -> Result<(u32, u32)> {
     let decoder = png::Decoder::new(std::io::Cursor::new(input));
     let reader = decoder.read_info()?;
     Ok((reader.info().width, reader.info().height))
+}
+
+fn png_file_dimensions(input: &Path) -> Result<(u32, u32)> {
+    let mut decoder = png::Decoder::new(BufReader::new(File::open(input)?));
+    let header = decoder.read_header_info()?;
+    Ok((header.width, header.height))
 }
 
 fn json_escape(value: &str) -> String {

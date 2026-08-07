@@ -170,7 +170,8 @@ cargo +nightly fuzz build
 
 The reproducible benchmark package generates deterministic PNG corpora, compares
 the streaming pipeline with full-frame image-rs and pinned jSquash paths,
-measures native Peak RSS, and records WebAssembly linear-memory high-water marks. See
+compares slice and seekable-reader native input, measures native Peak RSS, and
+records WebAssembly linear-memory high-water marks. See
 [benchmarks/README.md](benchmarks/README.md) for commands and
 [benchmarks/REPORT.md](benchmarks/REPORT.md) for the current baseline.
 

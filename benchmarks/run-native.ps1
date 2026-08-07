@@ -25,7 +25,7 @@ try {
 
     Get-ChildItem -LiteralPath $corpusDirectory -Filter "*.png" | Sort-Object Name | ForEach-Object {
         $inputFile = $_.FullName
-        foreach ($method in @("streamthumb-png", "streamthumb-jpeg", "streamthumb-writer-png", "streamthumb-writer-jpeg", "streamthumb-cover-png", "streamthumb-cover-jpeg", "image-rs")) {
+        foreach ($method in @("streamthumb-png", "streamthumb-jpeg", "streamthumb-writer-png", "streamthumb-writer-jpeg", "streamthumb-reader-png", "streamthumb-reader-jpeg", "streamthumb-cover-png", "streamthumb-cover-jpeg", "image-rs")) {
             $extension = if ($method.EndsWith("jpeg")) { "jpg" } else { "png" }
             $outputFile = Join-Path $resultsDirectory "$($_.BaseName)-$method.$extension"
             $stdoutFile = Join-Path $env:TEMP "streamthumb-benchmark-stdout-$PID.txt"
@@ -53,6 +53,14 @@ try {
             }
             finally {
                 Remove-Item -LiteralPath $stdoutFile, $stderrFile -ErrorAction SilentlyContinue
+            }
+        }
+        foreach ($pair in @(@{ Codec = "png"; Extension = "png" }, @{ Codec = "jpeg"; Extension = "jpg" })) {
+            $writerPath = Join-Path $resultsDirectory "$($_.BaseName)-streamthumb-writer-$($pair.Codec).$($pair.Extension)"
+            $readerPath = Join-Path $resultsDirectory "$($_.BaseName)-streamthumb-reader-$($pair.Codec).$($pair.Extension)"
+            if ((Get-FileHash -LiteralPath $writerPath -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath $readerPath -Algorithm SHA256).Hash) {
+                throw "Reader and slice writer outputs differ for $($pair.Codec) and $inputFile"
             }
         }
     }

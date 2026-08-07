@@ -50,7 +50,11 @@ set size. JSON Lines output is written to
 The `streamthumb-png` and `streamthumb-jpeg` methods use contain fit. The
 `streamthumb-writer-png` and `streamthumb-writer-jpeg` methods produce the same
 output through caller-owned files without retaining the completed encoded
-result. These pairs isolate the native memory effect of direct output. The
+result. The `streamthumb-reader-png` and `streamthumb-reader-jpeg` methods add
+seekable file input to the direct-writer paths, so they retain neither complete
+encoded input nor complete encoded output. The native runners require each
+reader result to be byte-for-byte identical to its slice-writer counterpart.
+These pairs isolate the native memory effect of encoded input retention. The
 `streamthumb-cover-png` and `streamthumb-cover-jpeg` methods use centered cover
 fit with the same production bounded output paths. JPEG is baseline sequential
 with the public defaults. The
@@ -120,6 +124,9 @@ values, WebAssembly binary bytes, Node RSS, and process maximum RSS. The
 jSquash record uses the same WASM and Node fields for direct schema-level
 comparison.
 
-Run multiple samples and summarize distributions before using these results for
-release claims. The checked-in report is an illustrative single-run baseline,
-not a cross-machine performance guarantee.
+For reader methods, elapsed time includes reading the source through the codec;
+slice methods preload the source before their timer starts. Runtime values
+between those two groups are therefore descriptive and not directly
+comparable. Run multiple samples and summarize distributions before using these
+results for release claims. The checked-in report is an illustrative single-run
+baseline, not a cross-machine performance guarantee.
