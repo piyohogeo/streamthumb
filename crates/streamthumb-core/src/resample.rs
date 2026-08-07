@@ -101,6 +101,7 @@ struct AxisMapping {
     crop_end: u128,
     source_pixel_span: u128,
     output_pixel_span: u128,
+    full: bool,
 }
 
 impl AxisMapping {
@@ -114,6 +115,7 @@ impl AxisMapping {
             crop_end: u128::from(source_len) * source_pixel_span,
             source_pixel_span,
             output_pixel_span,
+            full: true,
         }
     }
 
@@ -138,6 +140,7 @@ impl AxisMapping {
             crop_end,
             source_pixel_span,
             output_pixel_span,
+            full: false,
         })
     }
 
@@ -304,6 +307,9 @@ impl SparseAreaDownsampler {
             .samples_received
             .checked_add(1)
             .ok_or_else(|| overflow("sparse sample count"))?;
+        if self.horizontal_mapping.full && self.vertical_mapping.full {
+            return self.push_pixel_full(x, y, pixel);
+        }
         let Some(horizontal) = self.horizontal_mapping.sample(x)? else {
             return Ok(());
         };
@@ -351,6 +357,74 @@ impl SparseAreaDownsampler {
             }
         }
 
+        Ok(())
+    }
+
+    fn push_pixel_full(&mut self, x: u32, y: u32, pixel: [u8; 4]) -> Result<()> {
+        let source_width = u64::from(self.source.width);
+        let source_height = u64::from(self.source.height);
+        let output_width = u64::from(self.output.width);
+        let output_height = u64::from(self.output.height);
+        let source_x_start = u64::from(x)
+            .checked_mul(output_width)
+            .ok_or_else(|| overflow("sparse horizontal source interval"))?;
+        let source_x_end = source_x_start
+            .checked_add(output_width)
+            .ok_or_else(|| overflow("sparse horizontal source interval"))?;
+        let source_y_start = u64::from(y)
+            .checked_mul(output_height)
+            .ok_or_else(|| overflow("sparse vertical source interval"))?;
+        let source_y_end = source_y_start
+            .checked_add(output_height)
+            .ok_or_else(|| overflow("sparse vertical source interval"))?;
+        let first_output_x = source_x_start / source_width;
+        let last_output_x = div_ceil_u64(source_x_end, source_width)?;
+        let first_output_y = source_y_start / source_height;
+        let last_output_y = div_ceil_u64(source_y_end, source_height)?;
+        let red = u128::from(pixel[0]);
+        let green = u128::from(pixel[1]);
+        let blue = u128::from(pixel[2]);
+        let alpha = u128::from(pixel[3]);
+
+        for output_y in first_output_y..last_output_y {
+            let output_y_start = output_y
+                .checked_mul(source_height)
+                .ok_or_else(|| overflow("sparse vertical output interval"))?;
+            let output_y_end = output_y_start
+                .checked_add(source_height)
+                .ok_or_else(|| overflow("sparse vertical output interval"))?;
+            let y_overlap =
+                interval_overlap_u64(source_y_start, source_y_end, output_y_start, output_y_end);
+            for output_x in first_output_x..last_output_x {
+                let output_x_start = output_x
+                    .checked_mul(source_width)
+                    .ok_or_else(|| overflow("sparse horizontal output interval"))?;
+                let output_x_end = output_x_start
+                    .checked_add(source_width)
+                    .ok_or_else(|| overflow("sparse horizontal output interval"))?;
+                let x_overlap = interval_overlap_u64(
+                    source_x_start,
+                    source_x_end,
+                    output_x_start,
+                    output_x_end,
+                );
+                let weight = u128::from(x_overlap) * u128::from(y_overlap);
+                if weight == 0 {
+                    continue;
+                }
+                let index = output_y
+                    .checked_mul(output_width)
+                    .and_then(|row| row.checked_add(output_x))
+                    .ok_or_else(|| overflow("sparse output pixel index"))?;
+                let accumulator = &mut self.accumulators[usize::try_from(index)
+                    .map_err(|_| overflow("sparse output index conversion"))?];
+                accumulator.red += red * alpha * weight;
+                accumulator.green += green * alpha * weight;
+                accumulator.blue += blue * alpha * weight;
+                accumulator.alpha += alpha * weight;
+                accumulator.weight += weight;
+            }
+        }
         Ok(())
     }
 
@@ -496,6 +570,15 @@ where
 
     fn reduce_horizontal(&mut self, pixels: &[u8]) -> Result<()> {
         self.horizontal.fill(Accumulator::default());
+        if self.horizontal_mapping.full {
+            self.reduce_horizontal_full(pixels)
+        } else {
+            self.reduce_horizontal_cropped(pixels)
+        }
+    }
+
+    #[inline(never)]
+    fn reduce_horizontal_cropped(&mut self, pixels: &[u8]) -> Result<()> {
         for source_x in 0..self.source.width {
             let Some(sample) = self.horizontal_mapping.sample(source_x)? else {
                 continue;
@@ -534,7 +617,64 @@ where
         Ok(())
     }
 
+    #[inline(always)]
+    fn reduce_horizontal_full(&mut self, pixels: &[u8]) -> Result<()> {
+        let source_width = u64::from(self.source.width);
+        let output_width = u64::from(self.output.width);
+
+        for source_x in 0..source_width {
+            let source_start = source_x
+                .checked_mul(output_width)
+                .ok_or_else(|| overflow("horizontal source interval"))?;
+            let source_end = source_start
+                .checked_add(output_width)
+                .ok_or_else(|| overflow("horizontal source interval"))?;
+            let first_output_x = source_start / source_width;
+            let last_output_x = div_ceil_u64(source_end, source_width)?;
+            let pixel_offset = usize::try_from(source_x)
+                .map_err(|_| overflow("source pixel index"))?
+                .checked_mul(4)
+                .ok_or_else(|| overflow("source pixel offset"))?;
+            let red = u128::from(pixels[pixel_offset]);
+            let green = u128::from(pixels[pixel_offset + 1]);
+            let blue = u128::from(pixels[pixel_offset + 2]);
+            let alpha = u128::from(pixels[pixel_offset + 3]);
+
+            for output_x in first_output_x..last_output_x {
+                let output_start = output_x
+                    .checked_mul(source_width)
+                    .ok_or_else(|| overflow("horizontal output interval"))?;
+                let output_end = output_start
+                    .checked_add(source_width)
+                    .ok_or_else(|| overflow("horizontal output interval"))?;
+                let overlap =
+                    interval_overlap_u64(source_start, source_end, output_start, output_end);
+                if overlap == 0 {
+                    continue;
+                }
+                let accumulator = &mut self.horizontal
+                    [usize::try_from(output_x).map_err(|_| overflow("output pixel index"))?];
+                let weight = u128::from(overlap);
+                accumulator.red += red * alpha * weight;
+                accumulator.green += green * alpha * weight;
+                accumulator.blue += blue * alpha * weight;
+                accumulator.alpha += alpha * weight;
+                accumulator.weight += weight;
+            }
+        }
+        Ok(())
+    }
+
     fn accumulate_vertical(&mut self, source_y: u32) -> core::result::Result<(), S::Error> {
+        if self.vertical_mapping.full {
+            self.accumulate_vertical_full(source_y)
+        } else {
+            self.accumulate_vertical_cropped(source_y)
+        }
+    }
+
+    #[inline(never)]
+    fn accumulate_vertical_cropped(&mut self, source_y: u32) -> core::result::Result<(), S::Error> {
         let Some(sample) = self.vertical_mapping.sample(source_y)? else {
             return Ok(());
         };
@@ -559,6 +699,52 @@ where
                 vertical.weight += horizontal.weight * overlap;
             }
             if sample.clipped_end >= output_end {
+                self.finalize_output_row()?;
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn accumulate_vertical_full(&mut self, source_y: u32) -> core::result::Result<(), S::Error> {
+        let source_height = u64::from(self.source.height);
+        let output_height = u64::from(self.output.height);
+        let source_start = u64::from(source_y)
+            .checked_mul(output_height)
+            .ok_or_else(|| overflow("vertical source interval"))?;
+        let source_end = source_start
+            .checked_add(output_height)
+            .ok_or_else(|| overflow("vertical source interval"))?;
+        let first_output_y = source_start / source_height;
+        let last_output_y = div_ceil_u64(source_end, source_height)?;
+
+        for output_y in first_output_y..last_output_y {
+            let output_y_u32 =
+                u32::try_from(output_y).map_err(|_| overflow("vertical output row conversion"))?;
+            while self.current_output_y < output_y_u32 {
+                self.finalize_output_row()?;
+            }
+
+            let output_start = output_y
+                .checked_mul(source_height)
+                .ok_or_else(|| overflow("vertical output interval"))?;
+            let output_end = output_start
+                .checked_add(source_height)
+                .ok_or_else(|| overflow("vertical output interval"))?;
+            let overlap = u128::from(interval_overlap_u64(
+                source_start,
+                source_end,
+                output_start,
+                output_end,
+            ));
+            for (vertical, horizontal) in self.vertical.iter_mut().zip(&self.horizontal) {
+                vertical.red += horizontal.red * overlap;
+                vertical.green += horizontal.green * overlap;
+                vertical.blue += horizontal.blue * overlap;
+                vertical.alpha += horizontal.alpha * overlap;
+                vertical.weight += horizontal.weight * overlap;
+            }
+            if source_end >= output_end {
                 self.finalize_output_row()?;
             }
         }
@@ -663,6 +849,20 @@ const fn interval_overlap(a_start: u128, a_end: u128, b_start: u128, b_end: u128
     let start = if a_start > b_start { a_start } else { b_start };
     let end = if a_end < b_end { a_end } else { b_end };
     end.saturating_sub(start)
+}
+
+const fn interval_overlap_u64(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> u64 {
+    let start = if a_start > b_start { a_start } else { b_start };
+    let end = if a_end < b_end { a_end } else { b_end };
+    end.saturating_sub(start)
+}
+
+fn div_ceil_u64(numerator: u64, denominator: u64) -> Result<u64> {
+    let quotient = numerator / denominator;
+    let remainder = numerator % denominator;
+    quotient
+        .checked_add(u64::from(remainder != 0))
+        .ok_or_else(|| overflow("ceiling division"))
 }
 
 fn div_ceil_u128(numerator: u128, denominator: u128) -> Result<u128> {

@@ -9,7 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 jpeg-encoder = { version = "=0.6.1", default-features = false, features = ["std"] }
-streamthumb-core = { path = "../streamthumb-core" }
+streamthumb-core = { version = "0.1.0", path = "../streamthumb-core" }
 
 [dev-dependencies]
 jpeg-decoder = "0.3.2"

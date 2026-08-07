@@ -77,6 +77,8 @@ The same installed tarball is also exercised in Node.js and pinned Deno with
 explicit WebAssembly bytes, so the package remains free of runtime-specific
 filesystem dependencies.
 See [docs/RELEASING.md](docs/RELEASING.md) for the manual release process.
+The [release readiness audit](docs/RELEASE_READINESS.md) records the current
+package contents, dependency licenses, and remaining maintainer-only actions.
 The manually dispatched `Release Candidate` workflow additionally records the
 source revision, pinned build tools, byte size, and SHA-256 checksum without
 publishing, tagging, or creating a GitHub release.

@@ -80,6 +80,35 @@ The earlier PNG-only baseline was 228.7 KiB, so the measured codec addition is
 77.9 KiB (about 34%). JavaScript glue and package metadata remain excluded from
 both values.
 
+## Centered cover comparison
+
+A post-cover smoke run compares `contain` and centered `cover` with a 512-pixel
+square bound. Upscaling remains disabled. The square source therefore produces
+the same 512 x 512 output in both modes. The 64-pixel short axis limits cover
+output for the panoramic cases to 64 x 64, while contain preserves the complete
+source at 512 x 4 or 4 x 512.
+
+| Input | Fit | Output | PNG native / WASM | JPEG native / WASM | PNG / JPEG WASM high-water |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 2,048 x 2,048 blank | contain | 512 x 512 | 113.3 / 340.7 ms | 139.0 / 307.0 ms | 2.06 / 1.75 MiB |
+| 2,048 x 2,048 blank | cover | 512 x 512 | 131.5 / 344.1 ms | 130.4 / 315.4 ms | 2.06 / 1.75 MiB |
+| 64 x 8,192 noise | contain | 4 x 512 | 26.1 / 59.7 ms | 23.4 / 51.3 ms | 3.81 / 3.50 MiB |
+| 64 x 8,192 noise | cover | 64 x 64 | 19.0 / 57.6 ms | 26.3 / 60.2 ms | 3.81 / 3.50 MiB |
+| 8,192 x 64 gradient | contain | 512 x 4 | 17.9 / 56.8 ms | 19.5 / 45.6 ms | 2.12 / 1.81 MiB |
+| 8,192 x 64 gradient | cover | 64 x 64 | 14.4 / 30.9 ms | 15.3 / 33.0 ms | 2.06 / 1.75 MiB |
+
+Cover did not increase the WebAssembly high-water mark in any smoke case. A
+same-toolchain control build of the pre-cover revision measured the square
+contain PNG path at 112.6 to 116.1 ms across three direct runs, compared with
+113.3 ms in the recorded post-cover run. This check found no contain-path
+runtime regression beyond single-run noise. The cover implementation keeps the
+original integer contain path and uses exact fractional coordinates only when
+cropping is required.
+
+The optimized WebAssembly binary is 323.6 KiB with centered cover support,
+17.0 KiB (about 5.5%) above the 306.6 KiB JPEG baseline. The package and binary
+sizes remain descriptive measurements rather than release thresholds.
+
 ## Native results
 
 | Input | Method | Encoded input | Runtime | Peak RSS | Output |

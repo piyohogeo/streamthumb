@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat};
-use streamthumb_core::{Dimensions, OutputFormat, ThumbnailOptions, contain_dimensions};
+use streamthumb_core::{Dimensions, Fit, OutputFormat, ThumbnailOptions, contain_dimensions};
 use streamthumb_png::{ThumbnailOutput, thumbnail_png};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -131,7 +131,7 @@ fn main() -> Result<()> {
                 "usage:\n  streamthumb-benchmarks generate-smoke <directory>\n  \
                  streamthumb-benchmarks generate-memory <directory>\n  \
                  streamthumb-benchmarks generate-adam7 <directory>\n  \
-                 streamthumb-benchmarks run <streamthumb-png|streamthumb-jpeg|image-rs> <input> <output> <max-dimension>"
+                 streamthumb-benchmarks run <streamthumb-png|streamthumb-jpeg|streamthumb-cover-png|streamthumb-cover-jpeg|image-rs> <input> <output> <max-dimension>"
             );
             Err("invalid benchmark arguments".into())
         }
@@ -306,12 +306,34 @@ fn run_method(method: &str, input: &Path, output: &Path, max_dimension: u32) -> 
     let input_bytes = fs::read(input)?;
     let started = Instant::now();
     let (source_width, source_height, output_width, output_height, output_bytes) = match method {
-        "streamthumb" | "streamthumb-png" => {
-            run_streamthumb(&input_bytes, output, max_dimension, OutputFormat::Png)?
-        }
-        "streamthumb-jpeg" => {
-            run_streamthumb(&input_bytes, output, max_dimension, OutputFormat::Jpeg)?
-        }
+        "streamthumb" | "streamthumb-png" => run_streamthumb(
+            &input_bytes,
+            output,
+            max_dimension,
+            OutputFormat::Png,
+            Fit::Contain,
+        )?,
+        "streamthumb-jpeg" => run_streamthumb(
+            &input_bytes,
+            output,
+            max_dimension,
+            OutputFormat::Jpeg,
+            Fit::Contain,
+        )?,
+        "streamthumb-cover-png" => run_streamthumb(
+            &input_bytes,
+            output,
+            max_dimension,
+            OutputFormat::Png,
+            Fit::Cover,
+        )?,
+        "streamthumb-cover-jpeg" => run_streamthumb(
+            &input_bytes,
+            output,
+            max_dimension,
+            OutputFormat::Jpeg,
+            Fit::Cover,
+        )?,
         "image-rs" => run_image_rs(&input_bytes, output, max_dimension)?,
         _ => return Err(format!("unsupported benchmark method: {method}").into()),
     };
@@ -336,11 +358,13 @@ fn run_streamthumb(
     output: &Path,
     max_dimension: u32,
     format: OutputFormat,
+    fit: Fit,
 ) -> Result<(u32, u32, u32, u32, u64)> {
     let mut options = ThumbnailOptions {
         max_width: max_dimension,
         max_height: max_dimension,
         output: format,
+        fit,
         ..ThumbnailOptions::default()
     };
     options.limits.max_input_bytes = u64::try_from(input.len())?.saturating_add(1);

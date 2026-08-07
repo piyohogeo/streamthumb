@@ -37,3 +37,5 @@ project follows Semantic Versioning.
   quality, alpha-compositing background, and 4:2:0/4:2:2/4:4:4 controls.
 - A shared bounded encoder crate and MCU-row JPEG segmentation using standard
   restart markers, avoiding a complete resized RGBA or RGB frame.
+- Centered cover cropping across Rust, CLI, and WebAssembly APIs, with exact
+  fractional crop boundaries shared by ordered PNG and Adam7 processing.

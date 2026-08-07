@@ -3,6 +3,16 @@
 This project publishes the browser-targeted WebAssembly package as
 `@streamthumb/wasm`. The package is not published automatically by CI.
 
+See [the release readiness audit](RELEASE_READINESS.md) for the current package,
+dependency, license, and automated-gate inventory.
+
+The Rust workspace crates are assembled and build-verified together with
+`cargo package --workspace` in normal CI. Their internal path dependencies also
+carry exact workspace-version requirements so Cargo can replace paths during
+packaging. This is a readiness check only; crates.io publication is outside the
+current npm release procedure and requires a separate explicit maintainer
+decision and dependency-ordered publication plan.
+
 ## Prepare a release
 
 1. Choose a semantic version and update `workspace.package.version` in the

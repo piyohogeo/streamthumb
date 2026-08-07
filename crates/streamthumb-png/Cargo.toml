@@ -9,8 +9,8 @@ rust-version.workspace = true
 
 [dependencies]
 png = "0.18.1"
-streamthumb-core = { path = "../streamthumb-core" }
-streamthumb-encode = { path = "../streamthumb-encode" }
+streamthumb-core = { version = "0.1.0", path = "../streamthumb-core" }
+streamthumb-encode = { version = "0.1.0", path = "../streamthumb-encode" }
 
 [dev-dependencies]
 flate2 = "1.1.9"

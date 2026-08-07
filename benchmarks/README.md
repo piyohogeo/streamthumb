@@ -46,8 +46,10 @@ at one-millisecond intervals. The Linux runner uses GNU `time` maximum resident
 set size. JSON Lines output is written to
 `benchmarks/results/native-<profile>.jsonl`.
 
-The `streamthumb-png` and `streamthumb-jpeg` methods use the production bounded
-output paths. JPEG is baseline sequential with the public defaults. The
+The `streamthumb-png` and `streamthumb-jpeg` methods use contain fit. The
+`streamthumb-cover-png` and `streamthumb-cover-jpeg` methods use centered cover
+fit with the same production bounded output paths. JPEG is baseline sequential
+with the public defaults. The
 `image-rs` method intentionally performs a full RGBA decode, a Triangle resize,
 and PNG encoding. Its filter is not pixel-equivalent to streamthumb's area
 filter; this comparison measures full-frame pipeline cost rather than image
@@ -59,9 +61,9 @@ quality equivalence.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\benchmarks\run-wasm.ps1 -Profile smoke
 ```
 
-Each corpus case and output codec runs in a fresh Node.js process and a fresh
-WebAssembly instance. Records use `streamthumb-wasm-png` or
-`streamthumb-wasm-jpeg`. WebAssembly memory only grows, so the post-operation byte length is
+Each corpus case, fit mode, and output codec runs in a fresh Node.js process and
+a fresh WebAssembly instance. Records identify contain or cover along with PNG
+or JPEG. WebAssembly memory only grows, so the post-operation byte length is
 the linear-memory high-water mark for that case. It includes the allocator's
 retained pages and the copied encoded input, but excludes Node.js heap memory.
 Node RSS is reported separately.

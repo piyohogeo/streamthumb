@@ -3,7 +3,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { performance } = require("node:perf_hooks");
 
-function measureOne(packageDirectory, inputPath, maxDimensionText, format) {
+function measureOne(packageDirectory, inputPath, maxDimensionText, format, fit) {
   const streamthumb = require(path.resolve(packageDirectory));
   const wasmBinaryBytes = fs
     .readdirSync(packageDirectory)
@@ -19,6 +19,7 @@ function measureOne(packageDirectory, inputPath, maxDimensionText, format) {
   const result = streamthumb.thumbnailPng(input, {
     maxWidth: maxDimension,
     maxHeight: maxDimension,
+    fit,
     output: format,
     maxMemoryBytes: 512 * 1024 * 1024,
   });
@@ -27,7 +28,7 @@ function measureOne(packageDirectory, inputPath, maxDimensionText, format) {
   const memoryAfter = streamthumb.wasmMemoryBytes();
   const dimensions = path.basename(inputPath).match(/-(\d+)x(\d+)\.png$/);
   const record = {
-    method: `streamthumb-wasm-${format}`,
+    method: `streamthumb-wasm-${fit}-${format}`,
     input: inputPath,
     encoded_input_bytes: input.length,
     source_width: dimensions ? Number(dimensions[1]) : null,
@@ -54,13 +55,13 @@ function runParent(packageDirectory, corpusDirectory, resultFile, maxDimensionTe
   try {
     for (const file of files) {
       const inputPath = path.join(corpusDirectory, file);
-      for (const format of ["png", "jpeg"]) {
-        const child = spawnSync(process.execPath, [__filename, packageDirectory, inputPath, maxDimensionText, format], {
+      for (const [format, fit] of [["png", "contain"], ["jpeg", "contain"], ["png", "cover"], ["jpeg", "cover"]]) {
+        const child = spawnSync(process.execPath, [__filename, packageDirectory, inputPath, maxDimensionText, format, fit], {
           encoding: "utf8",
           env: { ...process.env, STREAMTHUMB_BENCHMARK_CHILD: "1" },
         });
         if (child.status !== 0) {
-          throw new Error(`WASM ${format} benchmark failed for ${inputPath}: ${child.stderr}`);
+          throw new Error(`WASM ${fit} ${format} benchmark failed for ${inputPath}: ${child.stderr}`);
         }
         fs.writeSync(output, child.stdout);
       }
@@ -71,11 +72,14 @@ function runParent(packageDirectory, corpusDirectory, resultFile, maxDimensionTe
 }
 
 if (process.env.STREAMTHUMB_BENCHMARK_CHILD === "1") {
-  const [packageDirectory, inputPath, maxDimensionText = "512", format = "png"] = process.argv.slice(2);
+  const [packageDirectory, inputPath, maxDimensionText = "512", format = "png", fit = "contain"] = process.argv.slice(2);
   if (format !== "png" && format !== "jpeg") {
     throw new Error("format must be png or jpeg");
   }
-  measureOne(packageDirectory, inputPath, maxDimensionText, format);
+  if (fit !== "contain" && fit !== "cover") {
+    throw new Error("fit must be contain or cover");
+  }
+  measureOne(packageDirectory, inputPath, maxDimensionText, format, fit);
 } else {
   const [packageDirectory, corpusDirectory, resultFile, maxDimensionText = "512"] = process.argv.slice(2);
   if (!packageDirectory || !corpusDirectory || !resultFile) {

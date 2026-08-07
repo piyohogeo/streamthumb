@@ -12,8 +12,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 js-sys = "0.3"
-streamthumb-core = { path = "../streamthumb-core" }
-streamthumb-png = { path = "../streamthumb-png" }
+streamthumb-core = { version = "0.1.0", path = "../streamthumb-core" }
+streamthumb-png = { version = "0.1.0", path = "../streamthumb-png" }
 wasm-bindgen = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

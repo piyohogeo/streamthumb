@@ -31,6 +31,13 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo check -p streamthumb-wasm --target wasm32-unknown-unknown
 
+  rust-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo package --workspace
+
   npm-package:
     runs-on: ubuntu-latest
     steps:
