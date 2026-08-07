@@ -10,6 +10,8 @@ Import the default initializer and call it once before using the named exports:
 import init, {
   planThumbnailPng,
   thumbnailPng,
+  thumbnailPngFromSeekable,
+  thumbnailPngFromSeekableToChunks,
   thumbnailPngToChunks,
 } from "@streamthumb/wasm";
 
@@ -18,8 +20,8 @@ await init();
 
 Browsers can let the initializer fetch the adjacent WebAssembly file. Filesystem runtimes should resolve the package module, read `streamthumb_wasm_bg.wasm`, and pass its bytes as `module_or_path`. The [Node.js](../examples/node) and [Deno](../examples/deno) examples show that pattern.
 
-Initialization is asynchronous. `planThumbnailPng`, `thumbnailPng`, and
-`thumbnailPngToChunks` are synchronous after initialization.
+Initialization is asynchronous. All planning and thumbnail functions are
+synchronous after initialization.
 
 Advanced consumers may instead call `initSync({ module })` with WebAssembly
 bytes or a precompiled `WebAssembly.Module`. The asynchronous initializer is
@@ -46,9 +48,43 @@ function thumbnailPngToChunks(
   onChunk: (chunk: Uint8Array) => void,
   options?: ThumbnailOptions | null,
 ): ChunkedThumbnailResult;
+
+type SeekableReadAt = (offset: number, length: number) => Uint8Array;
+
+function thumbnailPngFromSeekable(
+  inputLength: number,
+  readAt: SeekableReadAt,
+  options?: ThumbnailOptions | null,
+): ThumbnailResult;
+
+function thumbnailPngFromSeekableToChunks(
+  inputLength: number,
+  readAt: SeekableReadAt,
+  onChunk: (chunk: Uint8Array) => void,
+  options?: ThumbnailOptions | null,
+): ChunkedThumbnailResult;
 ```
 
 `input` contains one encoded PNG. Passing it into WebAssembly copies the input bytes. An omitted, `undefined`, or `null` options value selects every default below.
+
+The seekable functions avoid that complete input copy. `inputLength` is the
+encoded byte length and `readAt(offset, length)` must synchronously return an
+exact-length `Uint8Array`. The callback is intended for a dedicated worker,
+where a browser `File` or `Blob` can be read with `FileReaderSync`:
+
+```js
+const reader = new FileReaderSync();
+const readAt = (offset, length) => new Uint8Array(
+  reader.readAsArrayBuffer(file.slice(offset, offset + length)),
+);
+const result = thumbnailPngFromSeekable(file.size, readAt, options);
+```
+
+`FileReaderSync` is unavailable on the browser main thread. Transfer or
+structured-clone the `File` to a dedicated worker before calling these APIs.
+The package itself remains independent of DOM and filesystem types because it
+accepts only the numeric length and callback. Node.js and Deno callers may
+provide an equivalent synchronous range reader.
 
 `planThumbnailPng` validates PNG header metadata, options, and every input and
 output resource limit without decoding image pixels. It uses the same Rust
@@ -71,6 +107,12 @@ promptly or copy/queue the chunk under an application-defined limit. A thrown
 callback value aborts processing and is rethrown unchanged. Raw RGBA output is
 rejected by this function; use `thumbnailPng` for RGBA.
 
+`thumbnailPngFromSeekableToChunks` has the same output contract and restrictions
+while sourcing encoded input through `readAt`. The buffered seekable function
+supports PNG, JPEG, and RGBA. A value thrown by `readAt` or `onChunk` aborts
+processing and is rethrown unchanged; input callback failure takes precedence
+if both error slots are populated.
+
 ## Options
 
 All numeric options must be non-negative JavaScript safe integers. Operational dimensions and limits must be greater than zero. Width and height values must also fit in an unsigned 32-bit integer.
@@ -92,7 +134,7 @@ All numeric options must be non-negative JavaScript safe integers. Operational d
 | `maxOutputWidth` | `8,192` | Maximum planned output width. |
 | `maxOutputHeight` | `8,192` | Maximum planned output height. |
 | `maxOutputPixels` | `16,777,216` | Maximum planned output width multiplied by height. |
-| `maxMemoryBytes` | `33,554,432` (32 MiB) | Maximum conservative working-memory estimate. It covers decoder storage, resize storage, one completed output row for encoded output or the complete frame for raw RGBA, codec state, a bounded JPEG MCU segment where applicable, and retained encoded output. The chunk API counts its 64 KiB adapter buffer instead of the complete encoded result. It excludes caller-owned input and chunks, JavaScript memory, WebAssembly runtime overhead, and allocator slack. |
+| `maxMemoryBytes` | `33,554,432` (32 MiB) | Maximum conservative working-memory estimate. It covers decoder storage, resize storage, one completed output row for encoded output or the complete frame for raw RGBA, codec state, a bounded JPEG MCU segment where applicable, and retained encoded output. The chunk API counts its 64 KiB adapter buffer instead of the complete encoded result. It excludes caller-owned input, temporary seekable callback range arrays, caller-retained chunks, JavaScript memory, WebAssembly runtime overhead, and allocator slack. |
 
 The requested bounding box and all applicable resource limits must pass. Setting a limit lower than the requested or calculated operation does not clamp the output; it rejects the operation.
 
@@ -192,7 +234,8 @@ This result owns no WebAssembly allocation and has no `free()` method. The
 estimate excludes the caller-owned input, JavaScript-retained chunks, combined
 JavaScript output, preview objects, and WebAssembly runtime overhead.
 
-`thumbnailPng` returns a `ThumbnailResult` with these getters:
+`thumbnailPng` and `thumbnailPngFromSeekable` return a `ThumbnailResult` with
+these getters:
 
 | Property | Type | Contract |
 | --- | --- | --- |
@@ -206,7 +249,8 @@ PNG and JPEG outputs are complete encoded images. RGBA output is tightly packed,
 
 Reading `bytes` copies the output from WebAssembly. Read all required properties, then call `result.free()` to release the result's WebAssembly allocation promptly. `ThumbnailResult` also implements `Symbol.dispose` for runtimes that support explicit resource management. The copied `Uint8Array` remains valid after disposal.
 
-`thumbnailPngToChunks` returns a `ChunkedThumbnailResult` after the last callback:
+`thumbnailPngToChunks` and `thumbnailPngFromSeekableToChunks` return a
+`ChunkedThumbnailResult` after the last callback:
 
 | Property | Type | Contract |
 | --- | --- | --- |
@@ -250,13 +294,18 @@ The encoded byte limit is checked before parsing. Declared dimensions, pixels, o
 ## Errors and resource limits
 
 The initializer rejects its promise when WebAssembly loading or compilation
-fails. After successful initialization, all three thumbnail functions throw
+fails. After successful initialization, all thumbnail functions throw
 synchronously for:
 
 - invalid option types, unsupported option values, zero operational dimensions, or out-of-range numbers;
 - malformed, unsupported, truncated, or animated PNG input;
 - input, output, or working-memory limit violations;
 - checked arithmetic overflow, allocation failure, or internal consistency failure.
+
+The seekable APIs additionally reject an invalid `inputLength`, a Promise or
+non-`Uint8Array` callback result, and any result whose length differs from the
+requested range. They never interpret a short read as successful EOF before
+the declared encoded length.
 
 `planThumbnailPng` reports a working-memory limit shortfall through
 `withinMemoryLimit: false` rather than throwing. Execution with the same options

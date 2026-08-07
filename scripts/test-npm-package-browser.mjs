@@ -100,6 +100,15 @@ await esbuild.build({
   platform: "browser",
   target: "es2022",
 });
+await esbuild.build({
+  entryPoints: [path.join(consumer, "seekable-worker.js")],
+  bundle: true,
+  format: "esm",
+  logLevel: "warning",
+  outfile: path.join(consumer, "seekable-worker.bundle.js"),
+  platform: "browser",
+  target: "es2022",
+});
 
 const packageRoot = path.join(
   consumer,
@@ -112,6 +121,13 @@ const routes = new Map([
   [
     "/bundle.js",
     [path.join(consumer, "bundle.js"), "text/javascript; charset=utf-8"],
+  ],
+  [
+    "/seekable-worker.js",
+    [
+      path.join(consumer, "seekable-worker.bundle.js"),
+      "text/javascript; charset=utf-8",
+    ],
   ],
   [
     "/fixture.png",

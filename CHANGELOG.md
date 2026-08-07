@@ -20,11 +20,15 @@ project follows Semantic Versioning.
   `FileReaderSync` can drive the production seekable reader path without a
   complete encoded-input copy in Chrome and Firefox workers, with format,
   failure, multi-chunk, and performance evidence for provisional API adoption.
+- `thumbnailPngFromSeekable` and `thumbnailPngFromSeekableToChunks` WebAssembly
+  APIs for synchronous bounded range reads in dedicated browser workers.
 
 ### Changed
 
 - Release WebAssembly packages now use `wasm-opt -Oz` explicitly so the pinned
   Rust 1.85 build remains within the existing package-size budget.
+- Release builds use fat LTO, one code-generation unit, and aborting panics to
+  keep the expanded WebAssembly API within that unchanged size budget.
 
 ## [0.1.0] - 2026-08-07
 

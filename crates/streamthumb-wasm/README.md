@@ -11,7 +11,11 @@ npm install @streamthumb/wasm
 ## API
 
 ```js
-import init, { thumbnailPng, thumbnailPngToChunks } from "@streamthumb/wasm";
+import init, {
+  thumbnailPng,
+  thumbnailPngFromSeekable,
+  thumbnailPngToChunks,
+} from "@streamthumb/wasm";
 
 await init();
 
@@ -61,6 +65,25 @@ Each chunk is a new JavaScript-owned `Uint8Array`. The callback is synchronous,
 has no asynchronous backpressure, and may throw to abort processing. Raw RGBA
 output remains available only through `thumbnailPng`.
 
+Browser `File` and `Blob` inputs can avoid a complete `ArrayBuffer` and
+WebAssembly input copy when processing runs in a dedicated worker:
+
+```js
+const reader = new FileReaderSync();
+const readAt = (offset, length) => new Uint8Array(
+  reader.readAsArrayBuffer(file.slice(offset, offset + length)),
+);
+const result = thumbnailPngFromSeekable(file.size, readAt, {
+  maxWidth: 512,
+  maxHeight: 512,
+  output: "png",
+});
+```
+
+The callback is synchronous, must return exactly the requested bytes, and
+cannot return a Promise. `thumbnailPngFromSeekableToChunks` combines this input
+model with bounded encoded-output chunks. `FileReaderSync` is worker-only.
+
 `output: "png"` returns encoded PNG bytes with MIME type `image/png`.
 `output: "jpeg"` returns baseline JPEG bytes with MIME type `image/jpeg`; a
 nested `jpeg` object configures quality, RGB alpha-compositing background, and
@@ -79,9 +102,10 @@ metadata.
 
 The package exports `ThumbnailOptions`, `ThumbnailFit`, `ThumbnailFilter`,
 `ThumbnailOutputFormat`, `PngOptions`, `PngColorMode`, `PngCompression`,
-`PngFilter`, `JpegOptions`, `JpegSubsampling`, and `ThumbnailChunkCallback`
-TypeScript types. Every option is optional, and both thumbnail functions also
-accepts an omitted or `null` options value. PNG output remains RGBA8 by default;
+`PngFilter`, `JpegOptions`, `JpegSubsampling`, `ThumbnailChunkCallback`, and
+`SeekableReadAt` TypeScript types. Every option is optional, and every
+thumbnail function accepts an omitted or `null` options value. PNG output
+remains RGBA8 by default;
 the nested `png` object can select automatic or explicit 8-bit color output,
 compression, and scanline filtering.
 

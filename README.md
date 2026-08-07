@@ -113,6 +113,14 @@ contract](docs/WASM_API.md) and the examples for [browsers](examples/browser),
 [Node.js](examples/node), [Deno](examples/deno), and [Cloudflare
 Workers](examples/cloudflare-worker).
 
+Dedicated browser workers can instead call
+`thumbnailPngFromSeekable(file.size, readAt, options)` or
+`thumbnailPngFromSeekableToChunks(file.size, readAt, onChunk, options)`. A
+synchronous `readAt` backed by `FileReaderSync` and `Blob.slice()` avoids
+creating complete JavaScript and WebAssembly encoded-input copies. Existing
+byte-array APIs remain unchanged; asynchronous `ReadableStream` input is still
+outside the current contract.
+
 The generated package is prepared as `@streamthumb/wasm` in
 `target/npm-package`. Normal CI validates its metadata and exact tarball
 contents, installs it into an empty consumer project, checks its TypeScript
@@ -121,9 +129,10 @@ stores the unpublished tarball as the `npm-package` artifact.
 The same installed tarball is also exercised in Node.js and pinned Deno with
 explicit WebAssembly bytes, so the package remains free of runtime-specific
 filesystem dependencies.
-Input remains a complete `Uint8Array`. The [incremental-input feasibility
-report](docs/INCREMENTAL_INPUT_SPIKE.md) records the bounded native-reader spike
-and the decoder constraint that currently blocks a genuine asynchronous
+The [browser File input report](docs/BROWSER_FILE_INPUT_SPIKE.md) records the
+seekable worker measurements and adoption decision. The separate
+[incremental-input feasibility report](docs/INCREMENTAL_INPUT_SPIKE.md) records
+the decoder constraint that still blocks a genuine asynchronous
 `ReadableStream` API.
 See [docs/RELEASING.md](docs/RELEASING.md) for the manual release process.
 The [version 0.1.0 release audit](docs/RELEASE_READINESS.md) records the

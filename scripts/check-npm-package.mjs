@@ -120,7 +120,9 @@ const declarationContract = [
   "delivery?: OutputDelivery | null,",
   "options?: ThumbnailOptions | null,",
   "export type ThumbnailChunkCallback = (chunk: Uint8Array) => void;",
+  "export type SeekableReadAt = (offset: number, length: number) => Uint8Array;",
   "onChunk: ThumbnailChunkCallback,",
+  "readAt: SeekableReadAt,",
   "export class ThumbnailResult",
   "export class ChunkedThumbnailResult",
   "readonly bytesWritten: number;",
@@ -144,6 +146,12 @@ if ((declarations.match(/export function planThumbnailPng\(/g) ?? []).length !==
 }
 if ((declarations.match(/export function thumbnailPngToChunks\(/g) ?? []).length !== 1) {
   throw new Error("TypeScript declarations must export exactly one thumbnailPngToChunks signature.");
+}
+if ((declarations.match(/export function thumbnailPngFromSeekable\(/g) ?? []).length !== 1) {
+  throw new Error("TypeScript declarations must export exactly one thumbnailPngFromSeekable signature.");
+}
+if ((declarations.match(/export function thumbnailPngFromSeekableToChunks\(/g) ?? []).length !== 1) {
+  throw new Error("TypeScript declarations must export exactly one thumbnailPngFromSeekableToChunks signature.");
 }
 
 const npmCommand = process.platform === "win32"

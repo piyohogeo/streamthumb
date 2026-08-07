@@ -1,7 +1,10 @@
 import init, {
   streamthumbVersion,
   thumbnailPng,
+  thumbnailPngFromSeekable,
+  thumbnailPngFromSeekableToChunks,
   thumbnailPngToChunks,
+  type SeekableReadAt,
   type ThumbnailChunkCallback,
   type ThumbnailOptions,
   type ThumbnailOutputFormat,
@@ -75,6 +78,33 @@ void invalidOutput;
 void invalidWidth;
 void invalidPngColor;
 void jpegOutput;
+void thumbnailPngFromSeekable;
+void thumbnailPngFromSeekableToChunks;
+const typedReadAt: SeekableReadAt = (_offset, length) => new Uint8Array(length);
+void typedReadAt;
+
+function runSeekableWorker(file: Blob): Promise<{
+  bytes: Uint8Array;
+  chunkBytes: Uint8Array;
+  metadata: { width: number; height: number; format: string; chunkCount: number };
+}> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker("/seekable-worker.js", { type: "module" });
+    worker.onerror = (event) => {
+      worker.terminate();
+      reject(new Error(event.message));
+    };
+    worker.onmessage = ({ data }) => {
+      worker.terminate();
+      if (!data?.ok) {
+        reject(new Error(data?.error ?? "seekable worker failed"));
+        return;
+      }
+      resolve(data);
+    };
+    worker.postMessage(file);
+  });
+}
 
 try {
   await init();
@@ -104,6 +134,20 @@ try {
     throw new Error(`decoded PNG is ${decodedDimensions}`);
   }
   result.free();
+
+  const seekable = await runSeekableWorker(
+    new Blob([inputBytes], { type: "image/png" }),
+  );
+  if (
+    seekable.metadata.width !== 32
+    || seekable.metadata.height !== 32
+    || seekable.metadata.format !== "png"
+    || seekable.metadata.chunkCount < 1
+    || !equalBytes(seekable.bytes, bytes)
+    || !equalBytes(seekable.chunkBytes, bytes)
+  ) {
+    throw new Error("seekable File worker output differs from slice output");
+  }
 
   const chunkOptions: ThumbnailOptions = {
     maxWidth: 256,
@@ -148,7 +192,7 @@ try {
 
   await finish(
     "pass",
-    `PASS: @streamthumb/wasm ${streamthumbVersion()} verified buffered and multi-chunk PNG output`,
+    `PASS: @streamthumb/wasm ${streamthumbVersion()} verified buffered, multi-chunk, and seekable File output`,
   );
 } catch (error) {
   await finish("fail", `FAIL: ${error instanceof Error ? error.stack : error}`);

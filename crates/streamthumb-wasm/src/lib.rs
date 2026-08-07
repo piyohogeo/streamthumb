@@ -2,7 +2,7 @@
 
 use std::{
     cell::RefCell,
-    io::{self, Write},
+    io::{self, Cursor, Read, Seek, SeekFrom, Write},
     rc::Rc,
 };
 
@@ -12,12 +12,10 @@ use streamthumb_png::{
     JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngInputColorType,
     PngOptions, PngThumbnailPlan, ThumbnailOutput, preflight_thumbnail_png,
     preflight_thumbnail_png_to_writer_with_buffer,
-    thumbnail_jpeg_to_writer_with_options_and_buffer, thumbnail_png as create_thumbnail,
-    thumbnail_png_to_writer_with_encoder_options_and_buffer,
-    thumbnail_png_with_encoder_options as create_thumbnail_with_png_options,
-    thumbnail_png_with_jpeg_options as create_thumbnail_with_jpeg_options,
+    thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer, thumbnail_png_from_reader,
+    thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer,
+    thumbnail_png_from_reader_with_encoder_options, thumbnail_png_from_reader_with_jpeg_options,
 };
-#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
@@ -135,12 +133,30 @@ export function thumbnailPng(
     options?: ThumbnailOptions | null,
 ): ThumbnailResult;
 
+/** Synchronously reads an exact encoded-input range. */
+export type SeekableReadAt = (offset: number, length: number) => Uint8Array;
+
+/** Creates a thumbnail from bounded synchronous range reads. */
+export function thumbnailPngFromSeekable(
+    inputLength: number,
+    readAt: SeekableReadAt,
+    options?: ThumbnailOptions | null,
+): ThumbnailResult;
+
 /** Receives one owned encoded-output chunk. */
 export type ThumbnailChunkCallback = (chunk: Uint8Array) => void;
 
 /** Creates encoded PNG or JPEG output without retaining the complete result. */
 export function thumbnailPngToChunks(
     input: Uint8Array,
+    onChunk: ThumbnailChunkCallback,
+    options?: ThumbnailOptions | null,
+): ChunkedThumbnailResult;
+
+/** Creates chunked encoded output from bounded synchronous range reads. */
+export function thumbnailPngFromSeekableToChunks(
+    inputLength: number,
+    readAt: SeekableReadAt,
     onChunk: ThumbnailChunkCallback,
     options?: ThumbnailOptions | null,
 ): ChunkedThumbnailResult;
@@ -172,6 +188,150 @@ enum OutputDelivery {
     Chunks,
 }
 
+struct JsSeekableReader {
+    length: u64,
+    position: u64,
+    read_at: Function,
+    callback_error: Rc<RefCell<Option<JsValue>>>,
+}
+
+enum WasmInput<'a> {
+    Slice(Cursor<&'a [u8]>),
+    Seekable(JsSeekableReader),
+}
+
+impl Read for WasmInput<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Slice(reader) => reader.read(output),
+            Self::Seekable(reader) => reader.read(output),
+        }
+    }
+}
+
+impl Seek for WasmInput<'_> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        match self {
+            Self::Slice(reader) => reader.seek(position),
+            Self::Seekable(reader) => reader.seek(position),
+        }
+    }
+}
+
+impl JsSeekableReader {
+    fn new(length: u64, read_at: Function, callback_error: Rc<RefCell<Option<JsValue>>>) -> Self {
+        Self {
+            length,
+            position: 0,
+            read_at,
+            callback_error,
+        }
+    }
+
+    fn callback_failure(&self, error: JsValue) -> io::Error {
+        *self.callback_error.borrow_mut() = Some(error);
+        io::Error::other("JavaScript input callback failed")
+    }
+}
+
+impl Read for JsSeekableReader {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if self.callback_error.borrow().is_some() {
+            return Err(io::Error::other(
+                "JavaScript input callback previously failed",
+            ));
+        }
+        if output.is_empty() || self.position == self.length {
+            return Ok(0);
+        }
+        let remaining = self.length.checked_sub(self.position).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "reader position exceeds input length",
+            )
+        })?;
+        let requested = usize::try_from(remaining.min(output.len() as u64)).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "requested read cannot be represented",
+            )
+        })?;
+        let requested_u32 = u32::try_from(requested).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "requested read exceeds the adapter range",
+            )
+        })?;
+        let value = self
+            .read_at
+            .call2(
+                &JsValue::UNDEFINED,
+                &JsValue::from_f64(self.position as f64),
+                &JsValue::from_f64(requested as f64),
+            )
+            .map_err(|error| self.callback_failure(error))?;
+        if !value.is_instance_of::<Uint8Array>() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "readAt must return a Uint8Array",
+            ));
+        }
+        let bytes = value.unchecked_into::<Uint8Array>();
+        if bytes.length() != requested_u32 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "readAt returned a different byte length than requested",
+            ));
+        }
+        bytes.copy_to(&mut output[..requested]);
+        self.position = self.position.checked_add(requested as u64).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "reader position overflow")
+        })?;
+        Ok(requested)
+    }
+}
+
+impl Seek for JsSeekableReader {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        let next = match position {
+            SeekFrom::Start(offset) => i128::from(offset),
+            SeekFrom::Current(delta) => i128::from(self.position) + i128::from(delta),
+            SeekFrom::End(delta) => i128::from(self.length) + i128::from(delta),
+        };
+        if !(0..=i128::from(self.length)).contains(&next) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "seek position is outside the encoded input",
+            ));
+        }
+        self.position = u64::try_from(next).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "seek position cannot be represented",
+            )
+        })?;
+        Ok(self.position)
+    }
+}
+
+#[inline(never)]
+fn create_thumbnail_from_input(
+    reader: WasmInput<'_>,
+    options: &ThumbnailOptions,
+    png_options: &PngOptions,
+    jpeg_options: &JpegOptions,
+) -> streamthumb_png::Result<ThumbnailOutput> {
+    match options.output {
+        OutputFormat::Png => {
+            thumbnail_png_from_reader_with_encoder_options(reader, options, png_options)
+        }
+        OutputFormat::Jpeg => {
+            thumbnail_png_from_reader_with_jpeg_options(reader, options, jpeg_options)
+        }
+        OutputFormat::Rgba => thumbnail_png_from_reader(reader, options),
+    }
+}
+
 /// Inspects and plans a thumbnail without decoding image pixels.
 #[wasm_bindgen(js_name = planThumbnailPng, skip_typescript)]
 pub fn plan_thumbnail_png(
@@ -194,13 +354,38 @@ pub fn plan_thumbnail_png(
 #[wasm_bindgen(js_name = thumbnailPng, skip_typescript)]
 pub fn thumbnail_png(input: &[u8], options: &JsValue) -> Result<ThumbnailResult, JsError> {
     let (options, png_options, jpeg_options) = parse_options(options)?;
-    let output = match options.output {
-        OutputFormat::Png => create_thumbnail_with_png_options(input, &options, &png_options),
-        OutputFormat::Jpeg => create_thumbnail_with_jpeg_options(input, &options, &jpeg_options),
-        OutputFormat::Rgba => create_thumbnail(input, &options),
-    }
-    .map_err(|error| JsError::new(&error.to_string()))?;
+    let reader = WasmInput::Slice(Cursor::new(input));
+    let output = create_thumbnail_from_input(reader, &options, &png_options, &jpeg_options)
+        .map_err(|error| JsError::new(&error.to_string()))?;
     ThumbnailResult::from_output(output)
+}
+
+/// Creates a bounded thumbnail through synchronous encoded-input range reads.
+#[wasm_bindgen(js_name = thumbnailPngFromSeekable, skip_typescript)]
+pub fn thumbnail_png_from_seekable(
+    input_length: f64,
+    read_at: &Function,
+    options: &JsValue,
+) -> Result<ThumbnailResult, JsValue> {
+    let (options, png_options, jpeg_options) = parse_options(options).map_err(JsValue::from)?;
+    let input_length = required_safe_u64(input_length, "inputLength").map_err(JsValue::from)?;
+    let callback_error = Rc::new(RefCell::new(None));
+    let reader = WasmInput::Seekable(JsSeekableReader::new(
+        input_length,
+        read_at.clone(),
+        Rc::clone(&callback_error),
+    ));
+    let output = create_thumbnail_from_input(reader, &options, &png_options, &jpeg_options);
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            if let Some(callback_error) = callback_error.borrow_mut().take() {
+                return Err(callback_error);
+            }
+            return Err(JsError::new(&error.to_string()).into());
+        }
+    };
+    ThumbnailResult::from_output(output).map_err(JsValue::from)
 }
 
 /// Creates encoded output and forwards owned chunks to a JavaScript callback.
@@ -210,16 +395,44 @@ pub fn thumbnail_png_to_chunks(
     on_chunk: &Function,
     options: &JsValue,
 ) -> Result<ChunkedThumbnailResult, JsValue> {
+    let reader = WasmInput::Slice(Cursor::new(input));
+    thumbnail_to_chunks_from_input(reader, on_chunk, options, None)
+}
+
+/// Creates chunked encoded output through synchronous input range reads.
+#[wasm_bindgen(js_name = thumbnailPngFromSeekableToChunks, skip_typescript)]
+pub fn thumbnail_png_from_seekable_to_chunks(
+    input_length: f64,
+    read_at: &Function,
+    on_chunk: &Function,
+    options: &JsValue,
+) -> Result<ChunkedThumbnailResult, JsValue> {
+    let input_length = required_safe_u64(input_length, "inputLength").map_err(JsValue::from)?;
+    let input_callback_error = Rc::new(RefCell::new(None));
+    let reader = WasmInput::Seekable(JsSeekableReader::new(
+        input_length,
+        read_at.clone(),
+        Rc::clone(&input_callback_error),
+    ));
+    thumbnail_to_chunks_from_input(reader, on_chunk, options, Some(input_callback_error))
+}
+
+#[inline(never)]
+fn thumbnail_to_chunks_from_input(
+    reader: WasmInput<'_>,
+    on_chunk: &Function,
+    options: &JsValue,
+    input_callback_error: Option<Rc<RefCell<Option<JsValue>>>>,
+) -> Result<ChunkedThumbnailResult, JsValue> {
     let (options, png_options, jpeg_options) = parse_options(options).map_err(JsValue::from)?;
     if options.output == OutputFormat::Rgba {
         return Err(JsError::new("chunk output requires PNG or JPEG output").into());
     }
-
-    let callback_error = Rc::new(RefCell::new(None));
+    let output_callback_error = Rc::new(RefCell::new(None));
     let stats = Rc::new(RefCell::new(ChunkStats::default()));
     let writer = ChunkCallbackWriter::new({
         let on_chunk = on_chunk.clone();
-        let callback_error = Rc::clone(&callback_error);
+        let output_callback_error = Rc::clone(&output_callback_error);
         let stats = Rc::clone(&stats);
         move |chunk: &[u8]| {
             let bytes = Uint8Array::from(chunk);
@@ -237,7 +450,7 @@ pub fn thumbnail_png_to_chunks(
                     Ok(())
                 }
                 Err(error) => {
-                    *callback_error.borrow_mut() = Some(error);
+                    *output_callback_error.borrow_mut() = Some(error);
                     Err(io::Error::other("JavaScript chunk callback failed"))
                 }
             }
@@ -247,15 +460,15 @@ pub fn thumbnail_png_to_chunks(
     let finalizer = writer.clone();
 
     let result = match options.output {
-        OutputFormat::Png => thumbnail_png_to_writer_with_encoder_options_and_buffer(
-            input,
+        OutputFormat::Png => thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer(
+            reader,
             &options,
             &png_options,
             OUTPUT_CHUNK_BYTES,
             writer,
         ),
-        OutputFormat::Jpeg => thumbnail_jpeg_to_writer_with_options_and_buffer(
-            input,
+        OutputFormat::Jpeg => thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer(
+            reader,
             &options,
             &jpeg_options,
             OUTPUT_CHUNK_BYTES,
@@ -265,7 +478,13 @@ pub fn thumbnail_png_to_chunks(
     };
     if result.is_ok() {
         if let Err(error) = finalizer.finish() {
-            if let Some(callback_error) = callback_error.borrow_mut().take() {
+            if let Some(callback_error) = input_callback_error
+                .as_ref()
+                .and_then(|error| error.borrow_mut().take())
+            {
+                return Err(callback_error);
+            }
+            if let Some(callback_error) = output_callback_error.borrow_mut().take() {
                 return Err(callback_error);
             }
             return Err(JsError::new(&error.to_string()).into());
@@ -274,7 +493,13 @@ pub fn thumbnail_png_to_chunks(
     let info = match result {
         Ok(info) => info,
         Err(error) => {
-            if let Some(callback_error) = callback_error.borrow_mut().take() {
+            if let Some(callback_error) = input_callback_error
+                .as_ref()
+                .and_then(|error| error.borrow_mut().take())
+            {
+                return Err(callback_error);
+            }
+            if let Some(callback_error) = output_callback_error.borrow_mut().take() {
                 return Err(callback_error);
             }
             return Err(JsError::new(&error.to_string()).into());
@@ -874,18 +1099,22 @@ fn optional_u64(object: &JsValue, name: &str) -> Result<Option<u64>, JsError> {
             let number = value.as_f64().ok_or_else(|| {
                 JsError::new(&format!("{name} must be a non-negative safe integer"))
             })?;
-            if !number.is_finite()
-                || number < 0.0
-                || number.fract() != 0.0
-                || number > 9_007_199_254_740_991.0
-            {
-                return Err(JsError::new(&format!(
-                    "{name} must be a non-negative safe integer"
-                )));
-            }
-            Ok(number as u64)
+            required_safe_u64(number, name)
         })
         .transpose()
+}
+
+fn required_safe_u64(number: f64, name: &str) -> Result<u64, JsError> {
+    if !number.is_finite()
+        || number < 0.0
+        || number.fract() != 0.0
+        || number > 9_007_199_254_740_991.0
+    {
+        return Err(JsError::new(&format!(
+            "{name} must be a non-negative safe integer"
+        )));
+    }
+    Ok(number as u64)
 }
 
 #[cfg(test)]
@@ -942,6 +1171,37 @@ mod browser_tests {
         Reflect::set(options.as_ref(), &JsValue::from_str(name), value)
             .expect("the test options object must be writable");
         options
+    }
+
+    fn blob_read_at(input: &[u8]) -> (Function, Object) {
+        let factory = Function::new_with_args(
+            "input",
+            r#"
+                const blob = new Blob([input]);
+                const reader = new FileReaderSync();
+                const stats = { calls: 0, largest: 0 };
+                const readAt = (offset, length) => {
+                    stats.calls += 1;
+                    stats.largest = Math.max(stats.largest, length);
+                    return new Uint8Array(
+                        reader.readAsArrayBuffer(blob.slice(offset, offset + length)),
+                    );
+                };
+                return { readAt, stats };
+            "#,
+        );
+        let input = Uint8Array::from(input);
+        let harness = factory
+            .call1(&JsValue::UNDEFINED, input.as_ref())
+            .expect("the Blob callback harness must initialize")
+            .unchecked_into::<Object>();
+        let read_at = Reflect::get(&harness, &JsValue::from_str("readAt"))
+            .expect("the Blob harness must expose readAt")
+            .unchecked_into::<Function>();
+        let stats = Reflect::get(&harness, &JsValue::from_str("stats"))
+            .expect("the Blob harness must expose stats")
+            .unchecked_into::<Object>();
+        (read_at, stats)
     }
 
     fn property(object: &JsValue, name: &str) -> JsValue {
@@ -1192,6 +1452,130 @@ mod browser_tests {
     }
 
     #[wasm_bindgen_test]
+    fn seekable_file_input_matches_buffered_png_jpeg_and_rgba() {
+        for format in [OutputFormat::Png, OutputFormat::Jpeg, OutputFormat::Rgba] {
+            let options = options_with("output", &JsValue::from_str(output_format_name(format)));
+            let expected =
+                thumbnail_png(PNG_INPUT, options.as_ref()).expect("slice thumbnail must succeed");
+            let (read_at, stats) = blob_read_at(PNG_INPUT);
+            let actual =
+                thumbnail_png_from_seekable(PNG_INPUT.len() as f64, &read_at, options.as_ref())
+                    .expect("seekable thumbnail must succeed");
+
+            assert_eq!(actual.width(), expected.width());
+            assert_eq!(actual.height(), expected.height());
+            assert_eq!(actual.format(), expected.format());
+            assert_eq!(actual.mime_type(), expected.mime_type());
+            assert_eq!(actual.bytes(), expected.bytes());
+            assert!(number_property(stats.as_ref(), "calls") > 0.0);
+            assert!(number_property(stats.as_ref(), "largest") <= 8.0 * 1024.0);
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn seekable_chunk_output_matches_buffered_png_and_jpeg() {
+        for format in [OutputFormat::Png, OutputFormat::Jpeg] {
+            let options = options_with("output", &JsValue::from_str(output_format_name(format)));
+            let expected = thumbnail_png(PNG_INPUT, options.as_ref())
+                .expect("buffered thumbnail must succeed")
+                .bytes();
+            let (read_at, _) = blob_read_at(PNG_INPUT);
+            let chunks = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+            let target = Rc::clone(&chunks);
+            let callback: Closure<dyn FnMut(Uint8Array)> =
+                Closure::new(move |chunk: Uint8Array| target.borrow_mut().push(chunk.to_vec()));
+
+            let result = thumbnail_png_from_seekable_to_chunks(
+                PNG_INPUT.len() as f64,
+                &read_at,
+                callback.as_ref().unchecked_ref(),
+                options.as_ref(),
+            )
+            .expect("seekable chunk output must succeed");
+            let chunks = chunks.borrow();
+            assert_eq!(chunks.concat(), expected);
+            assert!(chunks.iter().all(|chunk| chunk.len() <= OUTPUT_CHUNK_BYTES));
+            assert_eq!(result.format(), output_format_name(format));
+            assert_eq!(result.bytes_written(), expected.len() as f64);
+            assert_eq!(result.chunk_count(), chunks.len() as u32);
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn seekable_input_limit_is_checked_before_the_first_read() {
+        let (read_at, stats) = blob_read_at(PNG_INPUT);
+        let options = options_with(
+            "maxInputBytes",
+            &JsValue::from_f64((PNG_INPUT.len() - 1) as f64),
+        );
+        assert!(
+            thumbnail_png_from_seekable(PNG_INPUT.len() as f64, &read_at, options.as_ref())
+                .is_err()
+        );
+        assert_eq!(number_property(stats.as_ref(), "calls"), 0.0);
+    }
+
+    #[wasm_bindgen_test]
+    fn seekable_input_and_output_callback_exceptions_preserve_identity() {
+        let input_factory = Function::new_no_args(
+            "const marker = { kind: 'input' }; return { marker, readAt() { throw marker; } };",
+        );
+        let input_harness = input_factory
+            .call0(&JsValue::UNDEFINED)
+            .unwrap()
+            .unchecked_into::<Object>();
+        let input_marker = property(input_harness.as_ref(), "marker");
+        let read_at = property(input_harness.as_ref(), "readAt").unchecked_into::<Function>();
+        let error = match thumbnail_png_from_seekable(16.0, &read_at, &JsValue::NULL) {
+            Ok(_) => panic!("input callback exception must abort processing"),
+            Err(error) => error,
+        };
+        assert!(Object::is(&error, &input_marker));
+
+        let (read_at, _) = blob_read_at(PNG_INPUT);
+        let output_marker = Object::new();
+        let output_factory = Function::new_with_args("marker", "return () => { throw marker; };");
+        let on_chunk = output_factory
+            .call1(&JsValue::UNDEFINED, output_marker.as_ref())
+            .unwrap()
+            .unchecked_into::<Function>();
+        let error = match thumbnail_png_from_seekable_to_chunks(
+            PNG_INPUT.len() as f64,
+            &read_at,
+            &on_chunk,
+            &JsValue::NULL,
+        ) {
+            Ok(_) => panic!("output callback exception must abort processing"),
+            Err(error) => error,
+        };
+        assert!(Object::is(&error, output_marker.as_ref()));
+    }
+
+    #[wasm_bindgen_test]
+    fn seekable_callback_contract_rejects_invalid_values() {
+        let noop = Function::new_no_args("");
+        for input_length in [f64::NAN, -1.0, 1.5, 9_007_199_254_740_992.0] {
+            assert!(
+                thumbnail_png_from_seekable(input_length, &noop, &JsValue::NULL).is_err(),
+                "invalid inputLength {input_length} must fail",
+            );
+        }
+
+        for body in [
+            "return Promise.resolve(new Uint8Array(length));",
+            "return new Uint8Array(Math.max(0, length - 1));",
+            "return new Uint8Array(length + 1);",
+            "return [offset, length];",
+        ] {
+            let read_at = Function::new_with_args("offset, length", body);
+            assert!(
+                thumbnail_png_from_seekable(16.0, &read_at, &JsValue::NULL).is_err(),
+                "invalid callback body must fail: {body}",
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
     fn applies_nested_png_encoder_options() {
         let options = Object::new();
         let png = Object::new();
@@ -1342,9 +1726,8 @@ mod browser_tests {
 
     #[wasm_bindgen_test]
     fn reports_invalid_browser_options() {
-        match thumbnail_png(PNG_INPUT, &JsValue::from_str("invalid")) {
-            Ok(_) => panic!("non-object options must fail"),
-            Err(_) => {}
+        if thumbnail_png(PNG_INPUT, &JsValue::from_str("invalid")).is_ok() {
+            panic!("non-object options must fail");
         }
     }
 

@@ -47,6 +47,10 @@ for (const publicExport of [
   "withinMemoryLimit: boolean;",
   "This result owns no WebAssembly allocation",
   "function thumbnailPngToChunks(",
+  "function thumbnailPngFromSeekable(",
+  "function thumbnailPngFromSeekableToChunks(",
+  "type SeekableReadAt =",
+  "dedicated worker",
   "Chunks contain at most 64 KiB",
   "does not\nconvert sRGB values to linear light",
 ]) {
