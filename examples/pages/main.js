@@ -1,5 +1,6 @@
 const MIB = 1024 * 1024;
 const KIB = 1024;
+const BUILD_REVISION = "__STREAMTHUMB_REVISION__";
 const memoryFields = [
   ["decoderRowsBytes", "Decoder rows"],
   ["decoderStagingBytes", "Decoder staging"],
@@ -14,6 +15,12 @@ const memoryFields = [
 ];
 
 const byId = (id) => document.getElementById(id);
+
+function versionedUrl(relativePath) {
+  const url = new URL(relativePath, import.meta.url);
+  url.searchParams.set("v", BUILD_REVISION);
+  return url;
+}
 const workspace = byId("workspace");
 const status = byId("status");
 const statusText = byId("status-text");
@@ -255,7 +262,7 @@ function renderSuccess(data) {
 }
 
 function createWorker() {
-  worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+  worker = new Worker(versionedUrl("./worker.js"), { type: "module" });
   worker.addEventListener("message", ({ data }) => {
     if (data.type === "ready") {
       ready = true;
@@ -370,9 +377,9 @@ dropZone.addEventListener("drop", (event) => { if (ready && !busy) selectFile(ev
 sampleButton.addEventListener("click", async () => {
   try {
     sampleButton.disabled = true;
-    const manifest = await fetch("./sample-manifest.json").then((response) => response.json());
+    const manifest = await fetch(versionedUrl("./sample-manifest.json")).then((response) => response.json());
     const sample = manifest.samples[0];
-    const response = await fetch(sample.path);
+    const response = await fetch(versionedUrl(sample.path));
     if (!response.ok) throw new Error(`Sample request failed with HTTP ${response.status}.`);
     inspectInput(await response.blob(), sample.path.split("/").at(-1));
   } catch (error) {
@@ -382,7 +389,7 @@ sampleButton.addEventListener("click", async () => {
 
 window.addEventListener("beforeunload", () => { clearPreview(); worker?.terminate(); });
 
-fetch("./build-metadata.json")
+fetch(versionedUrl("./build-metadata.json"))
   .then((response) => response.json())
   .then(({ revision }) => {
     if (/^[0-9a-f]{40}$/.test(revision)) {

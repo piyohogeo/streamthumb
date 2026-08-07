@@ -35,6 +35,9 @@ project follows Semantic Versioning.
   combines large decoded dimensions with a small encoded download.
 - The Pages working-memory control now accepts 128 KiB increments and includes
   low-memory presets for demonstrating preflight rejection before decoding.
+- Pages builds now attach the source revision to CSS, JavaScript, worker,
+  WebAssembly, manifest, metadata, and sample requests so cached assets from
+  different deployments cannot mix incompatible UI units and logic.
 - Release WebAssembly packages now use `wasm-opt -Oz` explicitly so the pinned
   Rust 1.85 build remains within the existing package-size budget.
 - Release builds use fat LTO, one code-generation unit, and aborting panics to

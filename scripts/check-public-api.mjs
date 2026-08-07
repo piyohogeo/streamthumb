@@ -164,7 +164,7 @@ for (const removedHeroCopy of ["Make the thumbnail.", "Keep the image.", "hero__
 
 const pagesWorker = await source("examples/pages/worker.js");
 for (const publicCall of [
-  'from "./vendor/streamthumb_wasm.js"',
+  'from "./vendor/streamthumb_wasm.js?v=__STREAMTHUMB_REVISION__"',
   "planThumbnailPngFromSeekable",
   "thumbnailPngFromSeekableToChunks",
   "thumbnailPngFromSeekable",
@@ -181,6 +181,8 @@ for (const copiedInputCall of ["planThumbnailPng(", "thumbnailPng(", "thumbnailP
 }
 const pagesMain = await source("examples/pages/main.js");
 requireText(pagesMain, "response.blob()", "examples/pages/main.js");
+requireText(pagesMain, 'const BUILD_REVISION = "__STREAMTHUMB_REVISION__";', "examples/pages/main.js");
+requireText(pagesMain, 'versionedUrl("./worker.js")', "examples/pages/main.js");
 if (pagesMain.includes(".arrayBuffer()")) {
   throw new Error("examples/pages/main.js must retain File and Blob input instead of materializing an ArrayBuffer");
 }

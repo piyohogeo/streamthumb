@@ -4,7 +4,7 @@ import init, {
   thumbnailPngFromSeekable,
   thumbnailPngFromSeekableToChunks,
   wasmMemoryBytes,
-} from "./vendor/streamthumb_wasm.js";
+} from "./vendor/streamthumb_wasm.js?v=__STREAMTHUMB_REVISION__";
 
 try {
   await init();

@@ -1,5 +1,13 @@
 const status = document.querySelector("#status");
-const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+const BUILD_REVISION = "__STREAMTHUMB_REVISION__";
+
+function versionedUrl(relativePath) {
+  const url = new URL(relativePath, import.meta.url);
+  url.searchParams.set("v", BUILD_REVISION);
+  return url;
+}
+
+const worker = new Worker(versionedUrl("./worker.js"), { type: "module" });
 let nextRequestId = 1;
 
 function waitForReady() {
@@ -57,7 +65,7 @@ async function waitFor(condition, message, timeoutMs = 15_000) {
 
 async function verifyPageUi() {
   const frame = document.createElement("iframe");
-  frame.src = "./index.html";
+  frame.src = versionedUrl("./index.html");
   frame.title = "Pages UI under test";
   document.body.append(frame);
   await new Promise((resolve, reject) => {
@@ -92,6 +100,7 @@ async function verifyPageUi() {
   id("max-height").value = "512";
   doc.querySelector('[data-memory-kib="128"]').click();
   assert(id("max-memory").value === "128", "The 128 KiB preset did not update the memory limit.");
+  assert(id("max-memory-bytes").textContent === "131,072 bytes", "The 128 KiB preset used stale MiB JavaScript.");
   id("run-button").click();
   await waitFor(() => id("result-label").textContent === "FAILED", "The UI did not show the planned-memory rejection.");
   assert(id("error-detail").textContent.includes("Required (planned)") && id("error-detail").textContent.includes("Configured limit"), "The UI omitted typed memory-limit values.");
@@ -124,7 +133,7 @@ async function report(result, message) {
 try {
   const ready = await waitForReady();
   assert(/^\d+\.\d+\.\d+/.test(ready.version), "Worker did not report a semantic version.");
-  const input = await fetch("./samples/large-rgba.png").then((response) => response.blob());
+  const input = await fetch(versionedUrl("./samples/large-rgba.png")).then((response) => response.blob());
 
   const png = await run(input, { maxWidth: 16, maxHeight: 16, output: "png", maxMemoryBytes: 4 * 1024 * 1024 });
   assert(png.type === "success", `PNG run failed: ${png.error}`);

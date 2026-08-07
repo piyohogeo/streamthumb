@@ -1398,3 +1398,9 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 1. The Pages working-memory control uses KiB so users can select limits from 128 KiB instead of being constrained to whole MiB values. The 4096 KiB initial value preserves the existing 4 MiB demo default.
 2. Presets emphasize 128, 256, and 512 KiB failure-boundary exploration while retaining convenient 1, 4, and 16 MiB choices.
 3. The bundled sample and 128 KiB preset provide a deterministic preflight rejection before pixel decoding. Chrome smoke coverage verifies rejection at 128 KiB and recovery after restoring 4096 KiB.
+
+### Phase 41 decisions
+
+1. Every Pages asset request that can affect behavior carries the deployed source revision as a query parameter. This covers CSS, main and smoke modules, the dedicated worker, generated WebAssembly glue and binary, sample manifest, build metadata, and sample PNG.
+2. The build resolves revision placeholders after copying source assets and rejects missing or unresolved tokens. It also patches the generated WebAssembly initializer so the binary cannot be served from a different cached package revision than its JavaScript glue.
+3. The Pages smoke test verifies that selecting the 128 KiB preset renders exactly `131,072 bytes`, catching a mixed deployment where new KiB markup is interpreted by older MiB JavaScript.
