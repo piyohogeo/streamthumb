@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file. The
 project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- Rust preflight planners that return the complete ordered or Adam7 working-memory
+  estimate without weakening execution-time enforcement of the configured limit.
+- PNG header inspection metadata and buffered or direct-writer preflight APIs for
+  the planned browser demo.
+
 ## [0.1.0] - 2026-08-07
 
 ### Added

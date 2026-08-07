@@ -1322,3 +1322,12 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. The public low-level `png::StreamingDecoder` accepts pushed slices, but the high-level unfiltering driver depends on crate-private types. It cannot currently feed streamthumb's normalized row pipeline through a supported API.
 5. A JavaScript `ReadableStream` cannot satisfy the synchronous seekable-reader contract. An async wrapper that collects all chunks is explicitly rejected as false streaming, and a `SharedArrayBuffer` blocking bridge conflicts with project non-goals.
 6. WebAssembly incremental input remains deferred until a supported push-to-row decoder path exists. Any future API must prove bounded retained input, asynchronous backpressure, cancellation, and ordered/Adam7 parity.
+
+### Phase 32 decisions
+
+1. The GitHub Pages demo foundation begins with Rust preflight planners that bypass only final working-memory-limit enforcement. Input and output limits, non-zero configuration, geometry, and checked arithmetic remain mandatory.
+2. Normal execution continues through the enforcing planners. A preflight result above the configured memory limit is diagnostic data and does not authorize allocation or decoding.
+3. `streamthumb-png` exposes validated header metadata and a `PngThumbnailPlan` that combines the input description, the existing `ProcessingPlan`, the configured limit, and a typed `within_memory_limit` result.
+4. Header inspection selects the ordered plan for non-interlaced input and the sparse plan for Adam7. Writer preflight includes the caller-selected adapter buffer, while raw RGBA writer delivery is rejected.
+5. The bounded chunk scan rejects APNG markers and truncated input before planning. Processing and preflight share this inspection path while execution retains its complete decoder validation.
+6. This phase adds no WebAssembly export, browser UI, Pages workflow, dependency, or publication behavior. The JavaScript API is added only after the Rust contract and tests are stable.

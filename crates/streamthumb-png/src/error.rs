@@ -34,6 +34,7 @@ pub enum Error {
     EncodeFailure(String),
     InvalidPngOptions(&'static str),
     InvalidJpegOptions(&'static str),
+    InvalidOutputDelivery(&'static str),
     EncodedOutputLimitExceeded {
         limit: usize,
     },
@@ -63,6 +64,9 @@ impl fmt::Display for Error {
             }
             Self::InvalidJpegOptions(message) => {
                 write!(formatter, "invalid JPEG encoder options: {message}")
+            }
+            Self::InvalidOutputDelivery(message) => {
+                write!(formatter, "invalid output delivery: {message}")
             }
             Self::EncodedOutputLimitExceeded { limit } => {
                 write!(formatter, "encoded output exceeded its {limit}-byte limit")

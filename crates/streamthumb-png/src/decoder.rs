@@ -5,6 +5,8 @@ use streamthumb_core::{
     AreaDownsampler, Dimensions, InputInfo, OutputFormat, ProcessingPlan, RgbaImage,
     SparseAreaDownsampler, ThumbnailInfo, ThumbnailOptions, plan_thumbnail, plan_thumbnail_sparse,
     plan_thumbnail_sparse_to_writer_with_buffer, plan_thumbnail_to_writer_with_buffer,
+    preflight_thumbnail, preflight_thumbnail_sparse,
+    preflight_thumbnail_sparse_to_writer_with_buffer, preflight_thumbnail_to_writer_with_buffer,
 };
 use streamthumb_encode::{JpegOptions, JpegRowSink, JpegWriterRowSink};
 
@@ -53,7 +55,7 @@ impl<R: BufRead + Seek> SeekableInput<R> {
         Ok(&mut self.reader)
     }
 
-    fn raw_trns_length(&mut self) -> Result<Option<usize>> {
+    fn chunk_metadata(&mut self) -> Result<PngChunkMetadata> {
         let start = self.start;
         let end = start.checked_add(self.encoded_bytes).ok_or(
             streamthumb_core::Error::IntegerOverflow {
@@ -65,10 +67,14 @@ impl<R: BufRead + Seek> SeekableInput<R> {
         if let Err(error) = reader.read_exact(&mut signature) {
             return map_metadata_io(error);
         }
+        if signature != *b"\x89PNG\r\n\x1a\n" {
+            return Err(Error::DecodeFailure("invalid PNG signature".to_owned()));
+        }
+        let mut metadata = PngChunkMetadata::default();
         loop {
             let position = reader.stream_position().map_err(Error::InputIo)?;
             if position.checked_add(12).is_none_or(|minimum| minimum > end) {
-                return Ok(None);
+                return Err(Error::TruncatedInput);
             }
             let mut header = [0_u8; 8];
             if let Err(error) = reader.read_exact(&mut header) {
@@ -90,22 +96,31 @@ impl<R: BufRead + Seek> SeekableInput<R> {
                 })?)
                 .and_then(|position| position.checked_add(4));
             let Some(chunk_end) = chunk_end else {
-                return Ok(None);
+                return Err(Error::TruncatedInput);
             };
             if chunk_end > end {
-                return Ok(None);
+                return Err(Error::TruncatedInput);
             }
             if &header[4..] == b"tRNS" {
-                return Ok(Some(length));
+                metadata.raw_trns_length = Some(length);
+            }
+            if matches!(&header[4..], b"acTL" | b"fcTL" | b"fdAT") {
+                metadata.animated = true;
             }
             if &header[4..] == b"IDAT" {
-                return Ok(None);
+                return Ok(metadata);
             }
             reader
                 .seek(SeekFrom::Start(chunk_end))
                 .map_err(Error::InputIo)?;
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PngChunkMetadata {
+    raw_trns_length: Option<usize>,
+    animated: bool,
 }
 
 fn buffered_input<R: Read + Seek>(
@@ -137,6 +152,101 @@ pub struct DecodedPngInfo {
     pub dimensions: Dimensions,
     pub rows_decoded: u32,
     pub plan: ProcessingPlan,
+}
+
+/// A PNG color type reported by header-only thumbnail planning.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PngInputColorType {
+    Grayscale,
+    Rgb,
+    Indexed,
+    GrayscaleAlpha,
+    Rgba,
+}
+
+/// Header metadata validated before thumbnail execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PngInputInfo {
+    pub dimensions: Dimensions,
+    pub encoded_bytes: u64,
+    pub color_type: PngInputColorType,
+    pub bit_depth: u8,
+    pub interlaced: bool,
+}
+
+/// A thumbnail plan that reports whether it fits the configured memory limit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PngThumbnailPlan {
+    pub input: PngInputInfo,
+    pub processing: ProcessingPlan,
+    pub configured_max_working_memory_bytes: usize,
+    pub within_memory_limit: bool,
+}
+
+/// Inspects and plans buffered PNG thumbnail processing without enforcing only
+/// the configured working-memory limit.
+///
+/// Input and output limits, dimensions, PNG header constraints, APNG rejection,
+/// and checked arithmetic remain enforced. Thumbnail execution performs its own
+/// plan and continues to enforce the working-memory limit.
+pub fn preflight_thumbnail_png(
+    input: &[u8],
+    options: &ThumbnailOptions,
+) -> Result<PngThumbnailPlan> {
+    let mut input = SeekableInput::new(Cursor::new(input), options)?;
+    preflight_thumbnail_png_with_storage(&mut input, options, EncodedOutputStorage::Buffered)
+}
+
+/// Plans PNG or JPEG delivery to a caller-owned writer with an adapter buffer.
+///
+/// Raw RGBA output has no encoded writer path and is rejected.
+#[doc(hidden)]
+pub fn preflight_thumbnail_png_to_writer_with_buffer(
+    input: &[u8],
+    options: &ThumbnailOptions,
+    writer_buffer_bytes: usize,
+) -> Result<PngThumbnailPlan> {
+    if options.output == OutputFormat::Rgba {
+        return Err(Error::InvalidOutputDelivery(
+            "writer delivery requires PNG or JPEG output",
+        ));
+    }
+    let mut input = SeekableInput::new(Cursor::new(input), options)?;
+    preflight_thumbnail_png_with_storage(
+        &mut input,
+        options,
+        EncodedOutputStorage::Writer(writer_buffer_bytes),
+    )
+}
+
+fn preflight_thumbnail_png_with_storage<R: BufRead + Seek>(
+    input: &mut SeekableInput<R>,
+    options: &ThumbnailOptions,
+    storage: EncodedOutputStorage,
+) -> Result<PngThumbnailPlan> {
+    let inspection = inspect_png_header(input, options)?;
+    let input_info = InputInfo {
+        dimensions: inspection.input.dimensions,
+        encoded_bytes: inspection.input.encoded_bytes,
+        source_bytes_per_pixel: inspection.source_bytes_per_pixel,
+    };
+    let processing = match (inspection.input.interlaced, storage) {
+        (false, EncodedOutputStorage::Buffered) => preflight_thumbnail(input_info, options),
+        (true, EncodedOutputStorage::Buffered) => preflight_thumbnail_sparse(input_info, options),
+        (false, EncodedOutputStorage::Writer(buffer_bytes)) => {
+            preflight_thumbnail_to_writer_with_buffer(input_info, options, buffer_bytes)
+        }
+        (true, EncodedOutputStorage::Writer(buffer_bytes)) => {
+            preflight_thumbnail_sparse_to_writer_with_buffer(input_info, options, buffer_bytes)
+        }
+    }?;
+    let configured_max_working_memory_bytes = options.limits.max_working_memory_bytes;
+    Ok(PngThumbnailPlan {
+        input: inspection.input,
+        processing,
+        configured_max_working_memory_bytes,
+        within_memory_limit: processing.memory.total_bytes <= configured_max_working_memory_bytes,
+    })
 }
 
 /// Decodes a supported PNG one row at a time and normalizes each row to RGBA8.
@@ -192,8 +302,7 @@ where
     R: BufRead + Seek,
     F: FnMut(RgbaRow<'_>) -> Result<()>,
 {
-    let encoded_bytes = input.encoded_bytes;
-    let raw_trns_length = input.raw_trns_length()?;
+    let inspection = inspect_png_header(input, options)?;
 
     let decoder_limit = options.limits.max_working_memory_bytes;
     let mut decoder = png::Decoder::new_with_limits(
@@ -209,16 +318,15 @@ where
     let header = decoder
         .read_header_info()
         .map_err(|error| map_decode_error(error, decoder_limit))?;
-    let dimensions = Dimensions::new(header.width, header.height)?;
+    let dimensions = inspection.input.dimensions;
     let source_color = header.color_type;
     validate_source_color_depth(source_color, header.bit_depth)?;
-    validate_direct_trns_length(raw_trns_length, source_color)?;
+    validate_header_matches_inspection(header, inspection)?;
     reject_interlacing(header.interlaced)?;
-    let source_bytes_per_pixel = planning_bytes_per_pixel(source_color, header.bit_depth)?;
     let input_info = InputInfo {
         dimensions,
-        encoded_bytes,
-        source_bytes_per_pixel,
+        encoded_bytes: inspection.input.encoded_bytes,
+        source_bytes_per_pixel: inspection.source_bytes_per_pixel,
     };
     let plan = match storage {
         EncodedOutputStorage::Buffered => plan_thumbnail(input_info, options),
@@ -941,7 +1049,7 @@ fn png_is_interlaced<R: BufRead + Seek>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
 ) -> Result<bool> {
-    inspect_png(input, options).map(|inspection| inspection.interlaced)
+    inspect_png_header(input, options).map(|inspection| inspection.input.interlaced)
 }
 
 #[derive(Clone, Copy)]
@@ -950,11 +1058,100 @@ struct PngInspection {
     auto_color: EncoderColor,
 }
 
+#[derive(Clone, Copy)]
+struct PngHeaderInspection {
+    input: PngInputInfo,
+    source_bytes_per_pixel: u8,
+}
+
+fn inspect_png_header<R: BufRead + Seek>(
+    input: &mut SeekableInput<R>,
+    options: &ThumbnailOptions,
+) -> Result<PngHeaderInspection> {
+    let metadata = input.chunk_metadata()?;
+    reject_animation(metadata.animated)?;
+    let encoded_bytes = input.encoded_bytes;
+    let decoder_limit = options.limits.max_working_memory_bytes.max(64 * 1024);
+    let mut decoder = png::Decoder::new_with_limits(
+        input.rewind()?,
+        png::Limits {
+            bytes: decoder_limit,
+        },
+    );
+    decoder.set_transformations(png::Transformations::IDENTITY);
+    decoder.set_ignore_text_chunk(true);
+    decoder.set_ignore_iccp_chunk(true);
+    let header = decoder
+        .read_header_info()
+        .map_err(|error| map_decode_error(error, decoder_limit))?;
+    let dimensions = Dimensions::new(header.width, header.height)?;
+    validate_source_color_depth(header.color_type, header.bit_depth)?;
+    validate_direct_trns_length(metadata.raw_trns_length, header.color_type)?;
+    let source_bytes_per_pixel = planning_bytes_per_pixel(header.color_type, header.bit_depth)?;
+    Ok(PngHeaderInspection {
+        input: PngInputInfo {
+            dimensions,
+            encoded_bytes,
+            color_type: png_input_color_type(header.color_type),
+            bit_depth: bit_depth_value(header.bit_depth),
+            interlaced: header.interlaced,
+        },
+        source_bytes_per_pixel,
+    })
+}
+
+fn validate_header_matches_inspection(
+    header: &png::Info<'_>,
+    inspection: PngHeaderInspection,
+) -> Result<()> {
+    if header.width != inspection.input.dimensions.width
+        || header.height != inspection.input.dimensions.height
+        || header.interlaced != inspection.input.interlaced
+        || png_input_color_type(header.color_type) != inspection.input.color_type
+        || bit_depth_value(header.bit_depth) != inspection.input.bit_depth
+    {
+        return Err(Error::DecodeFailure(
+            "PNG header changed between inspection and decoding".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn reject_animation(animated: bool) -> Result<()> {
+    if animated {
+        return Err(Error::Unsupported {
+            feature: UnsupportedFeature::Animation,
+            detail: "APNG is not supported",
+        });
+    }
+    Ok(())
+}
+
+const fn png_input_color_type(color: ColorType) -> PngInputColorType {
+    match color {
+        ColorType::Grayscale => PngInputColorType::Grayscale,
+        ColorType::Rgb => PngInputColorType::Rgb,
+        ColorType::Indexed => PngInputColorType::Indexed,
+        ColorType::GrayscaleAlpha => PngInputColorType::GrayscaleAlpha,
+        ColorType::Rgba => PngInputColorType::Rgba,
+    }
+}
+
+const fn bit_depth_value(depth: BitDepth) -> u8 {
+    match depth {
+        BitDepth::One => 1,
+        BitDepth::Two => 2,
+        BitDepth::Four => 4,
+        BitDepth::Eight => 8,
+        BitDepth::Sixteen => 16,
+    }
+}
+
 fn inspect_png<R: BufRead + Seek>(
     input: &mut SeekableInput<R>,
     options: &ThumbnailOptions,
 ) -> Result<PngInspection> {
-    let raw_trns_length = input.raw_trns_length()?;
+    let inspection = inspect_png_header(input, options)?;
     let decoder_limit = options.limits.max_working_memory_bytes;
     let mut decoder = png::Decoder::new_with_limits(
         input.rewind()?,
@@ -969,9 +1166,10 @@ fn inspect_png<R: BufRead + Seek>(
         .map_err(|error| map_decode_error(error, decoder_limit))?;
     let header = reader.info();
     validate_source_color_depth(header.color_type, header.bit_depth)?;
-    validate_direct_trns_length(raw_trns_length, header.color_type)?;
+    validate_header_matches_inspection(header, inspection)?;
+    reject_animation(reader.info().is_animated())?;
     Ok(PngInspection {
-        interlaced: header.interlaced,
+        interlaced: inspection.input.interlaced,
         auto_color: auto_encoder_color(header),
     })
 }
@@ -1045,8 +1243,7 @@ fn thumbnail_png_adam7_downsampler_with_storage<R: BufRead + Seek>(
     options: &ThumbnailOptions,
     storage: EncodedOutputStorage,
 ) -> Result<(SparseAreaDownsampler, ProcessingPlan)> {
-    let encoded_bytes = input.encoded_bytes;
-    let raw_trns_length = input.raw_trns_length()?;
+    let inspection = inspect_png_header(input, options)?;
     let decoder_limit = options.limits.max_working_memory_bytes;
     let mut decoder = png::Decoder::new_with_limits(
         input.rewind()?,
@@ -1061,20 +1258,19 @@ fn thumbnail_png_adam7_downsampler_with_storage<R: BufRead + Seek>(
     let header = decoder
         .read_header_info()
         .map_err(|error| map_decode_error(error, decoder_limit))?;
-    let dimensions = Dimensions::new(header.width, header.height)?;
+    let dimensions = inspection.input.dimensions;
     let source_color = header.color_type;
     validate_source_color_depth(source_color, header.bit_depth)?;
-    validate_direct_trns_length(raw_trns_length, source_color)?;
+    validate_header_matches_inspection(header, inspection)?;
     if !header.interlaced {
         return Err(Error::DecodeFailure(
             "Adam7 path received a non-interlaced PNG".to_owned(),
         ));
     }
-    let source_bytes_per_pixel = planning_bytes_per_pixel(source_color, header.bit_depth)?;
     let input_info = InputInfo {
         dimensions,
-        encoded_bytes,
-        source_bytes_per_pixel,
+        encoded_bytes: inspection.input.encoded_bytes,
+        source_bytes_per_pixel: inspection.source_bytes_per_pixel,
     };
     let plan = match storage {
         EncodedOutputStorage::Buffered => plan_thumbnail_sparse(input_info, options),
@@ -3747,6 +3943,140 @@ mod tests {
     }
 
     #[test]
+    fn preflight_matches_buffered_execution_for_ordered_and_adam7_input() {
+        let width = 9;
+        let height = 7;
+        let pixels = (0..width * height * 4)
+            .map(|index| u8::try_from((index * 17) % 251).unwrap())
+            .collect::<Vec<_>>();
+        let ordered = encode_png(
+            width,
+            height,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::Paeth,
+            &pixels,
+        );
+        let adam7 = encode_adam7_png(width, height, ColorType::Rgba, &pixels);
+        let options = ThumbnailOptions {
+            max_width: 5,
+            max_height: 4,
+            output: OutputFormat::Rgba,
+            ..default_options()
+        };
+
+        for (encoded, interlaced) in [(&ordered, false), (&adam7, true)] {
+            let preflight = preflight_thumbnail_png(encoded, &options).unwrap();
+            let mut input = SeekableInput::new(Cursor::new(encoded), &options).unwrap();
+            let (_, executed) = thumbnail_png_rgba_planned(&mut input, &options).unwrap();
+
+            assert_eq!(preflight.processing, executed);
+            assert_eq!(
+                preflight.input.dimensions,
+                Dimensions::new(width, height).unwrap()
+            );
+            assert_eq!(preflight.input.encoded_bytes, encoded.len() as u64);
+            assert_eq!(preflight.input.color_type, PngInputColorType::Rgba);
+            assert_eq!(preflight.input.bit_depth, 8);
+            assert_eq!(preflight.input.interlaced, interlaced);
+            assert!(preflight.within_memory_limit);
+            if interlaced {
+                assert!(preflight.processing.memory.sparse_accumulator_bytes > 0);
+                assert_eq!(preflight.processing.memory.horizontal_accumulator_bytes, 0);
+                assert_eq!(preflight.processing.memory.vertical_accumulator_bytes, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn writer_preflight_matches_execution_and_includes_the_adapter_buffer() {
+        let encoded = encode_png(
+            9,
+            7,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::Paeth,
+            &[31; 9 * 7 * 4],
+        );
+        let options = ThumbnailOptions {
+            max_width: 5,
+            max_height: 4,
+            output: OutputFormat::Png,
+            ..default_options()
+        };
+        let buffer_bytes = 64 * 1024;
+        let preflight =
+            preflight_thumbnail_png_to_writer_with_buffer(&encoded, &options, buffer_bytes)
+                .unwrap();
+        let mut input = SeekableInput::new(Cursor::new(encoded), &options).unwrap();
+        let executed = thumbnail_png_encoded_to_writer(
+            &mut input,
+            &options,
+            PngOptions::default(),
+            buffer_bytes,
+            SharedWriter::default(),
+        )
+        .unwrap();
+
+        assert_eq!(preflight.processing, executed);
+        assert_eq!(
+            preflight.processing.memory.encoded_output_bytes,
+            buffer_bytes
+        );
+    }
+
+    #[test]
+    fn preflight_reports_a_memory_rejection_without_weakening_execution() {
+        let encoded = encode_png(
+            2,
+            2,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::NoFilter,
+            &[0; 16],
+        );
+        let mut options = ThumbnailOptions {
+            output: OutputFormat::Rgba,
+            ..default_options()
+        };
+        options.limits.max_working_memory_bytes = 1;
+
+        let preflight = preflight_thumbnail_png(&encoded, &options).unwrap();
+
+        assert!(!preflight.within_memory_limit);
+        assert_eq!(preflight.configured_max_working_memory_bytes, 1);
+        assert!(preflight.processing.memory.total_bytes > 1);
+        assert!(matches!(
+            thumbnail_png_rgba(&encoded, &options),
+            Err(Error::Core(streamthumb_core::Error::LimitExceeded {
+                kind: LimitKind::WorkingMemory,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn writer_preflight_rejects_raw_rgba_delivery() {
+        let encoded = encode_png(
+            1,
+            1,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::NoFilter,
+            &[0; 4],
+        );
+        let options = ThumbnailOptions {
+            output: OutputFormat::Rgba,
+            ..default_options()
+        };
+
+        assert!(matches!(
+            preflight_thumbnail_png_to_writer_with_buffer(&encoded, &options, 64 * 1024),
+            Err(Error::InvalidOutputDelivery(_))
+        ));
+    }
+
+    #[test]
     fn normalizes_sixteen_bit_direct_color_with_rounding() {
         let cases = [
             (
@@ -3850,6 +4180,13 @@ mod tests {
                 ..
             }
         ));
+        assert!(matches!(
+            preflight_thumbnail_png(&encoded, &default_options()),
+            Err(Error::Unsupported {
+                feature: UnsupportedFeature::Animation,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -3879,6 +4216,10 @@ mod tests {
 
         let error = decode_png_rows(&encoded, &default_options(), |_| Ok(())).unwrap_err();
         assert!(matches!(error, Error::TruncatedInput), "{error:?}");
+        assert!(matches!(
+            preflight_thumbnail_png(&encoded, &default_options()),
+            Err(Error::TruncatedInput)
+        ));
     }
 
     #[test]

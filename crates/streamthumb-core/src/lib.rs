@@ -23,6 +23,8 @@ pub use options::{Filter, Fit, OutputFormat, ThumbnailOptions};
 pub use plan::{
     InputInfo, ProcessingPlan, ThumbnailInfo, plan_thumbnail, plan_thumbnail_sparse,
     plan_thumbnail_sparse_to_writer, plan_thumbnail_sparse_to_writer_with_buffer,
-    plan_thumbnail_to_writer, plan_thumbnail_to_writer_with_buffer,
+    plan_thumbnail_to_writer, plan_thumbnail_to_writer_with_buffer, preflight_thumbnail,
+    preflight_thumbnail_sparse, preflight_thumbnail_sparse_to_writer_with_buffer,
+    preflight_thumbnail_to_writer_with_buffer,
 };
 pub use resample::{AreaDownsampler, RgbaCollector, RgbaImage, RgbaRowSink, SparseAreaDownsampler};

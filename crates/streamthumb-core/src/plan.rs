@@ -36,7 +36,16 @@ pub struct ProcessingPlan {
 
 /// Validates limits and creates a processing plan before decoding begins.
 pub fn plan_thumbnail(input: InputInfo, options: &ThumbnailOptions) -> Result<ProcessingPlan> {
-    plan_thumbnail_with_layout(input, options, false, EncodedOutputStorage::Buffered)
+    plan_thumbnail_with_layout(input, options, false, EncodedOutputStorage::Buffered, true)
+}
+
+/// Creates a processing plan without enforcing the working-memory limit.
+///
+/// All other input, output, geometry, and configured-limit validation remains
+/// active. Execution paths must continue to use [`plan_thumbnail`] so the
+/// configured working-memory limit is enforced before allocation.
+pub fn preflight_thumbnail(input: InputInfo, options: &ThumbnailOptions) -> Result<ProcessingPlan> {
+    plan_thumbnail_with_layout(input, options, false, EncodedOutputStorage::Buffered, false)
 }
 
 /// Creates a processing plan for arbitrary-order sparse source samples.
@@ -44,7 +53,15 @@ pub fn plan_thumbnail_sparse(
     input: InputInfo,
     options: &ThumbnailOptions,
 ) -> Result<ProcessingPlan> {
-    plan_thumbnail_with_layout(input, options, true, EncodedOutputStorage::Buffered)
+    plan_thumbnail_with_layout(input, options, true, EncodedOutputStorage::Buffered, true)
+}
+
+/// Creates a sparse-input plan without enforcing the working-memory limit.
+pub fn preflight_thumbnail_sparse(
+    input: InputInfo,
+    options: &ThumbnailOptions,
+) -> Result<ProcessingPlan> {
+    plan_thumbnail_with_layout(input, options, true, EncodedOutputStorage::Buffered, false)
 }
 
 /// Creates a plan whose encoded result is forwarded to a caller-owned writer.
@@ -75,6 +92,23 @@ pub fn plan_thumbnail_to_writer_with_buffer(
         options,
         false,
         EncodedOutputStorage::Writer(writer_buffer_bytes),
+        true,
+    )
+}
+
+/// Creates a direct-writer preflight plan that retains an adapter buffer.
+#[doc(hidden)]
+pub fn preflight_thumbnail_to_writer_with_buffer(
+    input: InputInfo,
+    options: &ThumbnailOptions,
+    writer_buffer_bytes: usize,
+) -> Result<ProcessingPlan> {
+    plan_thumbnail_with_layout(
+        input,
+        options,
+        false,
+        EncodedOutputStorage::Writer(writer_buffer_bytes),
+        false,
     )
 }
 
@@ -90,6 +124,23 @@ pub fn plan_thumbnail_sparse_to_writer_with_buffer(
         options,
         true,
         EncodedOutputStorage::Writer(writer_buffer_bytes),
+        true,
+    )
+}
+
+/// Creates a sparse direct-writer preflight plan with an adapter buffer.
+#[doc(hidden)]
+pub fn preflight_thumbnail_sparse_to_writer_with_buffer(
+    input: InputInfo,
+    options: &ThumbnailOptions,
+    writer_buffer_bytes: usize,
+) -> Result<ProcessingPlan> {
+    plan_thumbnail_with_layout(
+        input,
+        options,
+        true,
+        EncodedOutputStorage::Writer(writer_buffer_bytes),
+        false,
     )
 }
 
@@ -104,6 +155,7 @@ fn plan_thumbnail_with_layout(
     options: &ThumbnailOptions,
     sparse: bool,
     encoded_output_storage: EncodedOutputStorage,
+    enforce_working_memory_limit: bool,
 ) -> Result<ProcessingPlan> {
     validate_non_zero_limits(options)?;
     validate_input(input, options)?;
@@ -156,11 +208,13 @@ fn plan_thumbnail_with_layout(
                 })?;
     }
     let encoded_output_limit_bytes = estimate_encoded_output_limit_bytes(output, options.output)?;
-    enforce(
-        LimitKind::WorkingMemory,
-        usize_to_u64(memory.total_bytes)?,
-        usize_to_u64(options.limits.max_working_memory_bytes)?,
-    )?;
+    if enforce_working_memory_limit {
+        enforce(
+            LimitKind::WorkingMemory,
+            usize_to_u64(memory.total_bytes)?,
+            usize_to_u64(options.limits.max_working_memory_bytes)?,
+        )?;
+    }
 
     Ok(ProcessingPlan {
         source: input.dimensions,
@@ -391,6 +445,30 @@ mod tests {
     }
 
     #[test]
+    fn preflight_returns_a_plan_over_the_memory_budget() {
+        let mut options = ThumbnailOptions::default();
+        options.limits.max_working_memory_bytes = 1;
+
+        let ordered = preflight_thumbnail(input(10, 10), &options).unwrap();
+        let sparse = preflight_thumbnail_sparse(input(10, 10), &options).unwrap();
+
+        assert!(ordered.memory.total_bytes > options.limits.max_working_memory_bytes);
+        assert!(sparse.memory.total_bytes > options.limits.max_working_memory_bytes);
+        assert!(sparse.memory.sparse_accumulator_bytes > 0);
+    }
+
+    #[test]
+    fn preflight_still_enforces_non_memory_limits() {
+        let mut options = ThumbnailOptions::default();
+        options.limits.max_input_bytes = 1;
+
+        assert_limit(
+            preflight_thumbnail(input(10, 10), &options).unwrap_err(),
+            LimitKind::InputBytes,
+        );
+    }
+
+    #[test]
     fn rejects_zero_requested_bounds() {
         let options = ThumbnailOptions {
             max_width: 0,
@@ -487,5 +565,20 @@ mod tests {
             buffered.encoded_output_limit_bytes,
             unbuffered.encoded_output_limit_bytes
         );
+    }
+
+    #[test]
+    fn writer_preflight_includes_the_adapter_above_the_memory_budget() {
+        let mut options = ThumbnailOptions {
+            output: crate::OutputFormat::Png,
+            ..ThumbnailOptions::default()
+        };
+        options.limits.max_working_memory_bytes = 1;
+
+        let plan = preflight_thumbnail_to_writer_with_buffer(input(512, 512), &options, 64 * 1024)
+            .unwrap();
+
+        assert_eq!(plan.memory.encoded_output_bytes, 64 * 1024);
+        assert!(plan.memory.total_bytes > options.limits.max_working_memory_bytes);
     }
 }
