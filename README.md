@@ -120,8 +120,10 @@ report](docs/INCREMENTAL_INPUT_SPIKE.md) records the bounded native-reader spike
 and the decoder constraint that currently blocks a genuine asynchronous
 `ReadableStream` API.
 See [docs/RELEASING.md](docs/RELEASING.md) for the manual release process.
-The [release readiness audit](docs/RELEASE_READINESS.md) records the current
-package contents, dependency licenses, and remaining maintainer-only actions.
+The [version 0.1.0 release audit](docs/RELEASE_READINESS.md) records the
+published package contents, dependency licenses, signed tag, artifact digest,
+and final workflow evidence. The release is available from
+[GitHub Releases](https://github.com/piyohogeo/streamthumb/releases/tag/v0.1.0).
 The manually dispatched `Release Candidate` workflow additionally records the
 source revision, pinned build tools, byte size, and SHA-256 checksum without
 publishing, tagging, or creating a GitHub release.

@@ -12,7 +12,7 @@ The Rust workspace crates are assembled and build-verified together with
 `cargo package --workspace` in normal CI. Their internal path dependencies also
 carry exact workspace-version requirements so Cargo can replace paths during
 packaging. This is a readiness check only; crates.io publication is outside the
-current npm release procedure and requires a separate explicit maintainer
+current GitHub Release procedure and requires a separate explicit maintainer
 decision and dependency-ordered publication plan.
 
 ## Prepare a release

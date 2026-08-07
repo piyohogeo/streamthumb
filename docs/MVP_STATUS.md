@@ -1,8 +1,8 @@
 # MVP implementation status
 
 This document maps the completion criteria in `STREAMTHUMB_DESIGN.md` to
-implementation and verification evidence. It describes the repository at
-version 0.1.0 before publication.
+implementation and verification evidence. It describes version 0.1.0 as
+published through the project's GitHub-only release process on 2026-08-07.
 
 ## Completion matrix
 
@@ -97,5 +97,6 @@ the owned-result API.
   wasm-image-optimization adapters remain deferred because the current report
   already demonstrates the targeted full-frame memory contrast without adding
   those toolchains to the repository.
-- npm publication, signed tags, and GitHub Releases remain explicit maintainer
-  actions and are not performed by CI.
+- npm and crates.io publication remain deferred. Tags and GitHub Releases are
+  explicit maintainer actions rather than CI operations; version 0.1.0 was
+  published from a verified signed tag through that manual process.
