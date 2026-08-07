@@ -20,3 +20,5 @@ project follows Semantic Versioning.
   revision, package size, and SHA-256 checksum before any release action.
 - Installed-tarball consumer tests for Node.js and Deno, including bare package
   resolution, explicit WebAssembly initialization, and PNG generation.
+- Runnable browser, Node.js, and Deno examples, a complete WebAssembly API
+  contract, and CI smoke tests that execute the public example sources.

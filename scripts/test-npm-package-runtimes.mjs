@@ -1,4 +1,4 @@
-import { copyFile, cp, mkdir, rm } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -30,6 +30,30 @@ await copyFile(
   ),
   path.join(consumer, "fixture.png"),
 );
+await copyFile(
+  path.join(root, "examples", "node", "thumbnail.mjs"),
+  path.join(consumer, "node-example.mjs"),
+);
+await copyFile(
+  path.join(root, "examples", "deno", "thumbnail.ts"),
+  path.join(consumer, "deno-example.ts"),
+);
+
+async function verifyPng(file, runtime) {
+  const bytes = await readFile(file);
+  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (!signature.every((value, index) => bytes[index] === value)) {
+    throw new Error(`${runtime} example output is not a PNG`);
+  }
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  if (width !== 32 || height !== 32) {
+    throw new Error(
+      `${runtime} example output is ${width}x${height}, expected 32x32`,
+    );
+  }
+  console.log(`PASS: ${runtime} public example created a 32x32 PNG`);
+}
 
 function run(command, arguments_, options = {}) {
   const result = spawnSync(command, arguments_, {
@@ -78,6 +102,13 @@ if (process.platform === "win32") {
 }
 run(npmCommand, npmArguments);
 run(process.execPath, [path.join(consumer, "node-smoke.mjs")]);
+const nodeOutput = path.join(consumer, "node-example.png");
+run(process.execPath, [
+  path.join(consumer, "node-example.mjs"),
+  path.join(consumer, "fixture.png"),
+  nodeOutput,
+]);
+await verifyPng(nodeOutput, "Node.js");
 
 if (!nodeOnly) {
   run("deno", [
@@ -85,6 +116,19 @@ if (!nodeOnly) {
     "--check",
     "--node-modules-dir=manual",
     `--allow-read=${consumer}`,
+    `--allow-write=${consumer}`,
     path.join(consumer, "deno-smoke.ts"),
   ]);
+  const denoOutput = path.join(consumer, "deno-example.png");
+  run("deno", [
+    "run",
+    "--check",
+    "--node-modules-dir=manual",
+    `--allow-read=${consumer}`,
+    `--allow-write=${consumer}`,
+    path.join(consumer, "deno-example.ts"),
+    path.join(consumer, "fixture.png"),
+    denoOutput,
+  ]);
+  await verifyPng(denoOutput, "Deno");
 }

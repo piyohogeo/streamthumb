@@ -11,4 +11,6 @@
 /benchmarks/node_modules/
 /tests/npm-browser-consumer/node_modules/
 /tests/npm-runtime-consumer/node_modules/
+/examples/node/node_modules/
+/examples/deno/node_modules/
 **/*.rs.bk

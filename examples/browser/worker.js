@@ -1,4 +1,6 @@
-import init, { thumbnailPng } from "../../pkg/streamthumb_wasm.js";
+import init, {
+  thumbnailPng,
+} from "../../target/npm-package/streamthumb_wasm.js";
 
 self.postMessage({ initializing: true });
 try {
@@ -17,12 +19,16 @@ self.addEventListener("message", ({ data }) => {
       maxMemoryBytes: 32 * 1024 * 1024,
     });
     const bytes = result.bytes;
+    const width = result.width;
+    const height = result.height;
+    const mimeType = result.mimeType;
+    result.free();
     self.postMessage(
       {
         bytes: bytes.buffer,
-        width: result.width,
-        height: result.height,
-        mimeType: result.mimeType,
+        width,
+        height,
+        mimeType,
       },
       [bytes.buffer],
     );

@@ -3,10 +3,12 @@
 Build the WebAssembly package at the repository root:
 
 ```text
-wasm-pack build crates/streamthumb-wasm --target web --out-dir ../../pkg
+node scripts/build-npm-package.mjs
 ```
 
 Then serve the repository root with any static HTTP server and open `examples/browser/index.html`. The thumbnail work runs in a module Web Worker.
+
+See [`docs/WASM_API.md`](../../docs/WASM_API.md) for the complete option, result, and error contracts.
 
 Open `examples/browser/smoke.html` to run a deterministic browser smoke test. It passes only after the module Web Worker has created a PNG and the browser has decoded the result.
 

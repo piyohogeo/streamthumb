@@ -26,7 +26,7 @@ node scripts/build-npm-package.mjs
 node scripts/check-npm-package.mjs
 ```
 
-The exported `thumbnailPng(inputBytes, options)` function works without DOM, Canvas, filesystem, threads, or `SharedArrayBuffer` APIs. See `examples/browser` and `examples/cloudflare-worker`.
+The exported `thumbnailPng(inputBytes, options)` function works without DOM, Canvas, filesystem, threads, or `SharedArrayBuffer` APIs. See [the WebAssembly API contract](docs/WASM_API.md) and the examples for [browsers](examples/browser), [Node.js](examples/node), [Deno](examples/deno), and [Cloudflare Workers](examples/cloudflare-worker).
 
 The generated package is prepared as `@streamthumb/wasm` in
 `target/npm-package`. Normal CI validates its metadata and exact tarball

@@ -50,11 +50,15 @@ jobs:
           deno-version: v2.9.5
       - uses: browser-actions/setup-chrome@v2
         id: package-chrome
+      - run: node scripts/check-public-api.mjs
+      - run: node --check examples/browser/main.js && node --check examples/browser/smoke.js && node --check examples/browser/worker.js && node --check examples/node/thumbnail.mjs
       - run: node scripts/build-npm-package.mjs
       - run: node scripts/check-npm-package.mjs
       - run: mkdir -p target/npm-artifacts && npm pack ./target/npm-package --pack-destination target/npm-artifacts
       - name: Test TypeScript package consumer in Chrome
         run: node scripts/test-npm-package-browser.mjs target/npm-artifacts/*.tgz '${{ steps.package-chrome.outputs.chrome-path }}'
+      - name: Test public browser example in Chrome
+        run: node scripts/test-browser-example.mjs '${{ steps.package-chrome.outputs.chrome-path }}'
       - name: Test package consumers in Node.js and Deno
         run: node scripts/test-npm-package-runtimes.mjs target/npm-artifacts/*.tgz
       - uses: actions/upload-artifact@v7

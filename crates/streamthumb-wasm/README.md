@@ -39,6 +39,7 @@ const result = thumbnailPng(inputBytes, {
 
 console.log(result.width, result.height, result.mimeType, result.format);
 const bytes = result.bytes;
+result.free();
 ```
 
 `output: "png"` returns encoded PNG bytes with MIME type `image/png`. `output: "rgba"` returns tightly packed, straight-alpha RGBA8 pixels with MIME type `application/octet-stream`.
@@ -82,3 +83,6 @@ The filesystem call belongs to the consumer; the package itself does not
 import Node.js or Deno APIs.
 
 The API has no dependency on DOM, Canvas, filesystem, threads, `SharedArrayBuffer`, or Node-specific APIs. Passing and returning byte arrays currently copies them across the JavaScript/WebAssembly boundary.
+
+See the [WebAssembly API contract](https://github.com/piyohogeo/streamthumb/blob/main/docs/WASM_API.md)
+for the complete option, result, input, and error contracts.

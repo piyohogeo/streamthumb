@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@streamthumb/wasm": "file:../../pkg"
+    "@streamthumb/wasm": "file:../../target/npm-package"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
@@ -13,4 +13,3 @@
     "deploy": "wrangler deploy"
   }
 }
-

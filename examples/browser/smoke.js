@@ -3,6 +3,13 @@ const status = document.querySelector("#status");
 function finish(result, message) {
   document.documentElement.dataset.result = result;
   status.textContent = message;
+  fetch("/example-result", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ result, message }),
+  }).catch(() => {
+    // The reporting endpoint exists only in the repository smoke-test server.
+  });
 }
 
 function isPng(bytes) {
