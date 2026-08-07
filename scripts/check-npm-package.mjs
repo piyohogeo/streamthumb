@@ -177,8 +177,8 @@ if (JSON.stringify(actualFiles) !== JSON.stringify(expectedFiles)) {
     `Unexpected package contents:\n${actualFiles.map((file) => `- ${file}`).join("\n")}`,
   );
 }
-if (report.unpackedSize > 500_000) {
-  throw new Error(`Unpacked package exceeds 500,000 bytes: ${report.unpackedSize}`);
+if (report.unpackedSize > 550_000) {
+  throw new Error(`Unpacked package exceeds 550,000 bytes: ${report.unpackedSize}`);
 }
 
 console.log(

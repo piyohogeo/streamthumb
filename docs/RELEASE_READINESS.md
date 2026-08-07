@@ -50,9 +50,11 @@ The local audit tarball contains exactly eight files:
 - `streamthumb_wasm_bg.wasm.d.ts`
 
 The package has no npm runtime dependencies. The local stable-toolchain audit
-measured 189,503 packed bytes and 487,555 unpacked bytes. These values are
-descriptive; the pinned release-candidate manifest is authoritative for any
-future release.
+measured 189,503 packed bytes and 487,555 unpacked bytes. The pinned Rust 1.85
+release-candidate build measured 532,213 unpacked bytes after the chunk-output
+API was added, so package inspection enforces a 550,000-byte ceiling. These
+values are descriptive; the pinned release-candidate manifest is authoritative
+for any future release.
 
 ## License and dependency audit
 
