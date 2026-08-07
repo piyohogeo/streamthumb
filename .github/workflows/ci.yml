@@ -42,9 +42,13 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
+      - uses: browser-actions/setup-chrome@v2
+        id: package-chrome
       - run: node scripts/build-npm-package.mjs
       - run: node scripts/check-npm-package.mjs
       - run: mkdir -p target/npm-artifacts && npm pack ./target/npm-package --pack-destination target/npm-artifacts
+      - name: Test installed package in Chrome
+        run: node scripts/test-npm-package-browser.mjs target/npm-artifacts/*.tgz '${{ steps.package-chrome.outputs.chrome-path }}'
       - uses: actions/upload-artifact@v7
         with:
           name: npm-package

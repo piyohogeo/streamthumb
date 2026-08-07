@@ -12,3 +12,5 @@ project follows Semantic Versioning.
   including Adam7 interlacing and applicable `tRNS` transparency.
 - Encoded PNG and raw RGBA output with explicit resource limits.
 - Native, browser, and comparative memory benchmark tooling.
+- An npm tarball consumer test covering package installation, browser import,
+  automatic WebAssembly loading, thumbnail generation, and PNG decoding.

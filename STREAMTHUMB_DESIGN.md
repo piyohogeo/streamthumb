@@ -1189,3 +1189,11 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 3. Package validation runs `npm pack --dry-run --json`, enforces an exact file list, and rejects an unpacked package larger than 500,000 bytes.
 4. Normal CI rebuilds and validates the package, creates a tarball without publishing it, and uploads that tarball as the `npm-package` artifact.
 5. Publishing remains an explicit maintainer action after version, changelog, CI, artifact, and tag checks. CI does not receive an npm publishing token.
+
+### Phase 17 decisions
+
+1. Package CI installs the generated tarball into a fresh private consumer project instead of importing the build directory directly.
+2. The consumer uses the public `@streamthumb/wasm` specifier through a browser import map and relies on the package's default WebAssembly URL resolution.
+3. Headless Chrome verifies package import, WebAssembly initialization, the exported version, thumbnail generation, PNG signature, and browser decoding of the output dimensions.
+4. The smoke-test server exposes an exact route allowlist and binds only to loopback. Generated consumer files and the isolated Chrome profile remain under the ignored `target` directory.
+5. Artifact upload occurs only after the installed-package browser smoke test passes. npm publication and Cloudflare runtime validation remain outside this phase.
