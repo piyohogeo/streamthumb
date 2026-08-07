@@ -14,6 +14,8 @@ matrix covers the PNG Suite grayscale, RGB, palette, and RGBA fixtures at 8 or
 16 bits, a generated Adam7 RGBA fixture, buffered and chunked PNG/JPEG output,
 raw RGBA output, checked seek behavior, bounded reads, input-limit rejection
 before the first read, invalid/truncated input, and callback exception identity.
+The evidence and production-adoption requirements are recorded in
+`docs/BROWSER_FILE_INPUT_SPIKE.md`.
 
 Run the checks from the repository root:
 
@@ -23,6 +25,7 @@ cargo clippy --manifest-path spikes/browser-file-input/Cargo.toml --all-targets 
 cargo test --manifest-path spikes/browser-file-input/Cargo.toml
 wasm-pack test --headless --chrome spikes/browser-file-input
 wasm-pack test --headless --firefox spikes/browser-file-input
+wasm-pack test --headless --chrome spikes/browser-file-input -- --nocapture
 ```
 
 The adapter intentionally has no JavaScript or Rust read cache beyond

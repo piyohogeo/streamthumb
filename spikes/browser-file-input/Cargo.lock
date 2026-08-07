@@ -322,6 +322,7 @@ version = "0.0.0"
 dependencies = [
  "flate2",
  "js-sys",
+ "png",
  "streamthumb-core",
  "streamthumb-png",
  "wasm-bindgen",

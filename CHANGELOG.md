@@ -18,7 +18,8 @@ project follows Semantic Versioning.
   previews, downloads, and automated Chrome coverage.
 - An isolated browser File input spike proving that `Blob.slice()` and
   `FileReaderSync` can drive the production seekable reader path without a
-  complete encoded-input copy in Chrome and Firefox workers.
+  complete encoded-input copy in Chrome and Firefox workers, with format,
+  failure, multi-chunk, and performance evidence for provisional API adoption.
 
 ### Changed
 

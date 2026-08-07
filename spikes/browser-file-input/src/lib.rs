@@ -358,15 +358,16 @@ mod wasm {
         use std::io::{Read, Seek, SeekFrom, Write};
 
         use flate2::{Compression, write::ZlibEncoder};
-        use js_sys::{Function, Object, Reflect, Uint8Array};
+        use js_sys::{Date, Function, Object, Reflect, Uint8Array, WebAssembly};
         use streamthumb_core::{OutputFormat, ThumbnailOptions};
         use streamthumb_png::{
-            JpegOptions, PngOptions, ThumbnailOutput,
+            JpegOptions, JpegSubsampling, PngCompression, PngOptions, ThumbnailOutput,
             thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer,
             thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer,
             thumbnail_png_from_reader_with_encoder_options,
             thumbnail_png_from_reader_with_jpeg_options, thumbnail_png_rgba,
-            thumbnail_png_with_encoder_options, thumbnail_png_with_jpeg_options,
+            thumbnail_png_rgba_from_reader, thumbnail_png_with_encoder_options,
+            thumbnail_png_with_jpeg_options,
         };
         use wasm_bindgen::{JsCast, JsValue};
         use wasm_bindgen_test::*;
@@ -466,6 +467,60 @@ mod wasm {
             png.extend_from_slice(data);
             let start = png.len() - data.len() - chunk_type.len();
             png.extend_from_slice(&crc32(&png[start..]).to_be_bytes());
+        }
+
+        fn insert_chunk_after_ihdr(input: &[u8], chunk_type: [u8; 4], data: &[u8]) -> Vec<u8> {
+            const AFTER_IHDR: usize = 8 + 4 + 4 + 13 + 4;
+            let mut output = input[..AFTER_IHDR].to_vec();
+            append_chunk(&mut output, chunk_type, data);
+            output.extend_from_slice(&input[AFTER_IHDR..]);
+            output
+        }
+
+        fn apng_fixture() -> Vec<u8> {
+            let mut animation_control = Vec::with_capacity(8);
+            animation_control.extend_from_slice(&1_u32.to_be_bytes());
+            animation_control.extend_from_slice(&0_u32.to_be_bytes());
+            insert_chunk_after_ihdr(RGBA_FIXTURE, *b"acTL", &animation_control)
+        }
+
+        fn truncated_ancillary_chunk_fixture() -> Vec<u8> {
+            const AFTER_IHDR: usize = 8 + 4 + 4 + 13 + 4;
+            let mut output = RGBA_FIXTURE[..AFTER_IHDR].to_vec();
+            output.extend_from_slice(&64_u32.to_be_bytes());
+            output.extend_from_slice(b"tEXt");
+            output.extend_from_slice(b"incomplete");
+            output
+        }
+
+        fn high_entropy_png(dimension: u32) -> Vec<u8> {
+            let mut state = 0x6d2b_79f5_u32;
+            let mut pixels = Vec::with_capacity((dimension * dimension * 3) as usize);
+            for _ in 0..dimension * dimension * 3 {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                pixels.push(state as u8);
+            }
+
+            let mut input = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut input, dimension, dimension);
+                encoder.set_color(png::ColorType::Rgb);
+                encoder.set_depth(png::BitDepth::Eight);
+                encoder.set_compression(png::Compression::Fast);
+                let mut writer = encoder.write_header().unwrap();
+                writer.write_image_data(&pixels).unwrap();
+            }
+            input
+        }
+
+        fn wasm_memory_bytes() -> u32 {
+            let memory = wasm_bindgen::memory().unchecked_into::<WebAssembly::Memory>();
+            memory
+                .buffer()
+                .unchecked_into::<js_sys::ArrayBuffer>()
+                .byte_length()
         }
 
         fn pass_sample_count(extent: u32, offset: u32, stride: u32) -> u32 {
@@ -942,9 +997,13 @@ mod wasm {
         #[wasm_bindgen_test]
         fn invalid_and_truncated_inputs_match_slice_diagnostics() {
             let truncated = &RGBA_FIXTURE[..RGBA_FIXTURE.len() - 1];
+            let apng = apng_fixture();
+            let malformed = truncated_ancillary_chunk_fixture();
             for (name, input) in [
                 ("invalid signature", INVALID_SIGNATURE),
                 ("truncated PNG", truncated),
+                ("APNG", apng.as_slice()),
+                ("truncated ancillary chunk", malformed.as_slice()),
             ] {
                 let options = ThumbnailOptions::default();
                 let expected = thumbnail_png_rgba(input, &options).unwrap_err().to_string();
@@ -952,6 +1011,138 @@ mod wasm {
                 let actual = run_rgba(input.len() as f64, &read_at, &options).unwrap_err();
                 assert_eq!(error_message(&actual), expected, "{name} diagnostic");
             }
+        }
+
+        #[wasm_bindgen_test]
+        fn invalid_input_lengths_are_rejected_before_callback_reads() {
+            for input_length in [f64::NAN, f64::INFINITY, -1.0, 1.5, 9_007_199_254_740_992.0] {
+                let (read_at, stats) = blob_harness(RGBA_FIXTURE);
+                assert!(run_rgba(input_length, &read_at, &ThumbnailOptions::default()).is_err());
+                assert_eq!(
+                    Reflect::get(&stats, &JsValue::from_str("calls"))
+                        .unwrap()
+                        .as_f64(),
+                    Some(0.0),
+                );
+            }
+        }
+
+        #[wasm_bindgen_test]
+        fn high_entropy_png_and_jpeg_cross_multiple_output_chunks() {
+            let input = high_entropy_png(256);
+
+            let png_options = ThumbnailOptions {
+                output: OutputFormat::Png,
+                ..ThumbnailOptions::default()
+            };
+            let png_encoder_options = PngOptions {
+                compression: PngCompression::NoCompression,
+                ..PngOptions::default()
+            };
+            let expected = encoded_bytes(
+                thumbnail_png_with_encoder_options(&input, &png_options, &png_encoder_options)
+                    .unwrap(),
+            );
+            let chunks = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+            let writer = ChunkCallbackWriter::new({
+                let chunks = Rc::clone(&chunks);
+                move |chunk: &[u8]| {
+                    chunks.borrow_mut().push(chunk.to_vec());
+                    Ok(())
+                }
+            })
+            .unwrap();
+            let finalizer = writer.clone();
+            let (read_at, _) = blob_harness(&input);
+            thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer(
+                new_reader(input.len(), read_at),
+                &png_options,
+                &png_encoder_options,
+                OUTPUT_CHUNK_BYTES,
+                writer,
+            )
+            .unwrap();
+            finalizer.finish().unwrap();
+            assert!(chunks.borrow().len() > 1);
+            assert_eq!(chunks.borrow().concat(), expected);
+
+            let jpeg_options = ThumbnailOptions {
+                output: OutputFormat::Jpeg,
+                ..ThumbnailOptions::default()
+            };
+            let jpeg_encoder_options = JpegOptions {
+                quality: 100,
+                subsampling: JpegSubsampling::S444,
+                ..JpegOptions::default()
+            };
+            let expected = encoded_bytes(
+                thumbnail_png_with_jpeg_options(&input, &jpeg_options, &jpeg_encoder_options)
+                    .unwrap(),
+            );
+            let chunks = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+            let writer = ChunkCallbackWriter::new({
+                let chunks = Rc::clone(&chunks);
+                move |chunk: &[u8]| {
+                    chunks.borrow_mut().push(chunk.to_vec());
+                    Ok(())
+                }
+            })
+            .unwrap();
+            let finalizer = writer.clone();
+            let (read_at, _) = blob_harness(&input);
+            thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer(
+                new_reader(input.len(), read_at),
+                &jpeg_options,
+                &jpeg_encoder_options,
+                OUTPUT_CHUNK_BYTES,
+                writer,
+            )
+            .unwrap();
+            finalizer.finish().unwrap();
+            assert!(chunks.borrow().len() > 1);
+            assert_eq!(chunks.borrow().concat(), expected);
+        }
+
+        #[wasm_bindgen_test]
+        fn reports_seekable_read_and_runtime_measurements() {
+            let input = high_entropy_png(1024);
+            let (read_at, _) = blob_harness(&input);
+            let callback_error = Rc::new(RefCell::new(None));
+            let stats = Rc::new(RefCell::new(ReadStats::default()));
+            let reader = JsSeekableReader::new(
+                input.len() as u64,
+                read_at,
+                Rc::clone(&callback_error),
+                Rc::clone(&stats),
+            );
+            let before = wasm_memory_bytes();
+            let started = Date::now();
+            let image = thumbnail_png_rgba_from_reader(reader, &ThumbnailOptions::default())
+                .expect("seekable measurement decode must succeed");
+            let seekable_millis = Date::now() - started;
+            let after = wasm_memory_bytes();
+            assert!(callback_error.borrow().is_none());
+            let stats = *stats.borrow();
+
+            let started = Date::now();
+            let slice_image = thumbnail_png_rgba(&input, &ThumbnailOptions::default())
+                .expect("slice measurement decode must succeed");
+            let slice_millis = Date::now() - started;
+            assert_eq!(image, slice_image);
+            assert!(stats.read_calls > 0);
+            assert!(stats.largest_read <= 8 * 1024);
+            wasm_bindgen_test::console_log!(
+                "BROWSER_FILE_INPUT_METRIC input={} reads={} bytes={} largest={} seeks={} seekable_ms={:.3} slice_ms={:.3} wasm_before={} wasm_after={}",
+                input.len(),
+                stats.read_calls,
+                stats.bytes_read_total,
+                stats.largest_read,
+                stats.seek_calls,
+                seekable_millis,
+                slice_millis,
+                before,
+                after,
+            );
         }
     }
 }
