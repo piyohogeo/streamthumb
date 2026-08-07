@@ -1,10 +1,7 @@
-use std::{
-    cell::RefCell,
-    io::{self, Write},
-    rc::Rc,
-};
+use std::io::Write;
 
-use streamthumb_core::{Dimensions, Error as CoreError, RgbaRowSink};
+use streamthumb_core::{Dimensions, Error as CoreError, OutputFormat, RgbaRowSink};
+use streamthumb_encode::BoundedWriter;
 
 #[cfg(test)]
 use streamthumb_core::RgbaImage;
@@ -75,7 +72,7 @@ impl PngRowSink {
         color: EncoderColor,
         options: PngOptions,
     ) -> Result<Self> {
-        let output = BoundedWriter::new(byte_limit)?;
+        let output = BoundedWriter::new(byte_limit, OutputFormat::Png)?;
         let mut encoder = png::Encoder::new(output.clone(), dimensions.width, dimensions.height);
         encoder.set_color(color.png_color_type());
         encoder.set_depth(png::BitDepth::Eight);
@@ -85,10 +82,10 @@ impl PngRowSink {
         }
         let writer = encoder
             .write_header()
-            .map_err(|error| output.map_encoding_error(error))?;
+            .map_err(|error| output.map_external_error(error.to_string()))?;
         let stream = writer
             .into_stream_writer()
-            .map_err(|error| output.map_encoding_error(error))?;
+            .map_err(|error| output.map_external_error(error.to_string()))?;
         Ok(Self {
             dimensions,
             next_y: 0,
@@ -144,7 +141,7 @@ impl RgbaRowSink for PngRowSink {
         };
         self.stream
             .write_all(encoded_row)
-            .map_err(|error| self.output.map_io_error(error))?;
+            .map_err(|error| self.output.map_external_error(error.to_string()))?;
         self.next_y = self
             .next_y
             .checked_add(1)
@@ -164,8 +161,8 @@ impl RgbaRowSink for PngRowSink {
         }
         self.stream
             .finish()
-            .map_err(|error| self.output.map_encoding_error(error))?;
-        self.output.into_bytes()
+            .map_err(|error| self.output.map_external_error(error.to_string()))?;
+        self.output.into_bytes().map_err(Into::into)
     }
 }
 
@@ -238,96 +235,6 @@ fn rgba_row_bytes(dimensions: Dimensions) -> Result<usize> {
             }
             .into()
         })
-}
-
-#[derive(Clone)]
-struct BoundedWriter {
-    state: Rc<RefCell<BoundedWriterState>>,
-}
-
-struct BoundedWriterState {
-    bytes: Vec<u8>,
-    limit: usize,
-    failure: Option<WriterFailure>,
-}
-
-#[derive(Clone, Copy)]
-enum WriterFailure {
-    LimitExceeded,
-    AllocationFailed { bytes: usize },
-}
-
-impl BoundedWriter {
-    fn new(limit: usize) -> Result<Self> {
-        let initial_capacity = limit.min(64 * 1024);
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(initial_capacity)
-            .map_err(|_| Error::AllocationFailed {
-                bytes: initial_capacity,
-            })?;
-        Ok(Self {
-            state: Rc::new(RefCell::new(BoundedWriterState {
-                bytes,
-                limit,
-                failure: None,
-            })),
-        })
-    }
-
-    fn map_encoding_error(&self, error: png::EncodingError) -> Error {
-        self.map_failure()
-            .unwrap_or_else(|| Error::EncodeFailure(error.to_string()))
-    }
-
-    fn map_io_error(&self, error: io::Error) -> Error {
-        self.map_failure()
-            .unwrap_or_else(|| Error::EncodeFailure(error.to_string()))
-    }
-
-    fn map_failure(&self) -> Option<Error> {
-        let state = self.state.borrow();
-        match state.failure {
-            Some(WriterFailure::LimitExceeded) => {
-                Some(Error::EncodedOutputLimitExceeded { limit: state.limit })
-            }
-            Some(WriterFailure::AllocationFailed { bytes }) => {
-                Some(Error::AllocationFailed { bytes })
-            }
-            None => None,
-        }
-    }
-
-    fn into_bytes(self) -> Result<Vec<u8>> {
-        Rc::try_unwrap(self.state)
-            .map_err(|_| Error::EncodeFailure("PNG output writer is still shared".to_owned()))
-            .map(RefCell::into_inner)
-            .map(|state| state.bytes)
-    }
-}
-
-impl Write for BoundedWriter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let mut state = self.state.borrow_mut();
-        let required = state.bytes.len().checked_add(buffer.len()).ok_or_else(|| {
-            state.failure = Some(WriterFailure::LimitExceeded);
-            io::Error::other("encoded PNG output size overflow")
-        })?;
-        if required > state.limit {
-            state.failure = Some(WriterFailure::LimitExceeded);
-            return Err(io::Error::other("encoded PNG output limit exceeded"));
-        }
-        if let Err(_error) = state.bytes.try_reserve_exact(buffer.len()) {
-            state.failure = Some(WriterFailure::AllocationFailed { bytes: required });
-            return Err(io::Error::other("encoded PNG output allocation failed"));
-        }
-        state.bytes.extend_from_slice(buffer);
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 # WebAssembly API contract
 
-The `@streamthumb/wasm` package exposes a runtime-neutral byte-array API for bounded PNG thumbnail generation. It does not depend on DOM, Canvas, filesystem, threads, `SharedArrayBuffer`, or runtime-specific APIs.
+The `@streamthumb/wasm` package exposes a runtime-neutral byte-array API for bounded PNG-input thumbnail generation with PNG, JPEG, or raw RGBA output. It does not depend on DOM, Canvas, filesystem, threads, `SharedArrayBuffer`, or runtime-specific APIs.
 
 ## Initialization
 
@@ -42,8 +42,9 @@ All numeric options must be non-negative JavaScript safe integers. Operational d
 | `fit` | `"contain"` | Preserves aspect ratio inside the requested bounding box. This is the only supported fit mode. |
 | `filter` | `"area"` | Uses the area resampling filter. This is the only supported filter. |
 | `allowUpscale` | `false` | When false, neither output dimension exceeds the corresponding input dimension. |
-| `output` | `"png"` | Selects encoded `"png"` or raw `"rgba"` output. |
+| `output` | `"png"` | Selects encoded `"png"`, encoded `"jpeg"`, or raw `"rgba"` output. |
 | `png` | RGBA8, balanced compression, default filter | Optional PNG-only encoder settings described below. Supplying this object with raw RGBA output is an error. |
+| `jpeg` | quality 85, white background, 4:2:0 | Optional JPEG-only encoder settings described below. Supplying this object with PNG or raw RGBA output is an error. |
 | `maxInputBytes` | `67,108,864` (64 MiB) | Maximum encoded input length. |
 | `maxInputWidth` | `100,000` | Maximum width declared by the PNG header. |
 | `maxInputHeight` | `100,000` | Maximum height declared by the PNG header. |
@@ -51,7 +52,7 @@ All numeric options must be non-negative JavaScript safe integers. Operational d
 | `maxOutputWidth` | `8,192` | Maximum planned output width. |
 | `maxOutputHeight` | `8,192` | Maximum planned output height. |
 | `maxOutputPixels` | `16,777,216` | Maximum planned output width multiplied by height. |
-| `maxMemoryBytes` | `33,554,432` (32 MiB) | Maximum conservative working-memory estimate. It covers decoder storage, resize storage, one completed output row for encoded PNG or the complete frame for raw RGBA, encoder state, and bounded encoded output. It excludes caller-owned input, JavaScript memory, WebAssembly runtime overhead, and allocator slack. |
+| `maxMemoryBytes` | `33,554,432` (32 MiB) | Maximum conservative working-memory estimate. It covers decoder storage, resize storage, one completed output row for encoded output or the complete frame for raw RGBA, codec state, a bounded JPEG MCU segment where applicable, and bounded encoded output. It excludes caller-owned input, JavaScript memory, WebAssembly runtime overhead, and allocator slack. |
 
 The requested bounding box and all applicable resource limits must pass. Setting a limit lower than the requested or calculated operation does not clamp the output; it rejects the operation.
 
@@ -82,19 +83,33 @@ non-interlaced.
 Explicit filters override that choice. Compression and filtering can change
 runtime and encoded size but not decoded pixels.
 
+### JPEG encoder options
+
+The nested `jpeg` object accepts:
+
+| Property | Default | Values |
+| --- | --- | --- |
+| `quality` | `85` | Integer from `1` through `100` |
+| `background` | `[255, 255, 255]` | Three integer RGB channels from `0` through `255` |
+| `subsampling` | `"420"` | `"420"`, `"422"`, `"444"` |
+
+JPEG has no alpha channel. Straight-alpha thumbnail pixels are composited over
+`background` before encoding. Output is an 8-bit baseline sequential JPEG with
+fixed Huffman tables. Width and height must each be at most 65,535 pixels.
+
 ## Result
 
 `thumbnailPng` returns a `ThumbnailResult` with these getters:
 
 | Property | Type | Contract |
 | --- | --- | --- |
-| `bytes` | `Uint8Array` | A copy of the encoded PNG or raw RGBA bytes. |
+| `bytes` | `Uint8Array` | A copy of the encoded PNG, encoded JPEG, or raw RGBA bytes. |
 | `width` | `number` | Output width in pixels. |
 | `height` | `number` | Output height in pixels. |
-| `mimeType` | `string` | `image/png` for PNG or `application/octet-stream` for RGBA. |
-| `format` | `string` | `png` or `rgba`. |
+| `mimeType` | `string` | `image/png` for PNG, `image/jpeg` for JPEG, or `application/octet-stream` for RGBA. |
+| `format` | `string` | `png`, `jpeg`, or `rgba`. |
 
-PNG output is a complete encoded PNG. RGBA output is tightly packed, row-major, straight-alpha RGBA8 data whose length is `width * height * 4`.
+PNG and JPEG outputs are complete encoded images. RGBA output is tightly packed, row-major, straight-alpha RGBA8 data whose length is `width * height * 4`.
 
 Reading `bytes` copies the output from WebAssembly. Read all required properties, then call `result.free()` to release the result's WebAssembly allocation promptly. `ThumbnailResult` also implements `Symbol.dispose` for runtimes that support explicit resource management. The copied `Uint8Array` remains valid after disposal.
 

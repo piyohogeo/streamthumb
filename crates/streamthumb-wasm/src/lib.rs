@@ -3,9 +3,10 @@
 use js_sys::Reflect;
 use streamthumb_core::{Filter, Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
-    PngColorMode, PngCompression, PngFilter, PngOptions, ThumbnailOutput,
-    thumbnail_png as create_thumbnail,
+    JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngOptions,
+    ThumbnailOutput, thumbnail_png as create_thumbnail,
     thumbnail_png_with_encoder_options as create_thumbnail_with_png_options,
+    thumbnail_png_with_jpeg_options as create_thumbnail_with_jpeg_options,
 };
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
@@ -20,7 +21,7 @@ export type ThumbnailFit = "contain";
 export type ThumbnailFilter = "area";
 
 /** Output representations supported by the WebAssembly API. */
-export type ThumbnailOutputFormat = "png" | "rgba";
+export type ThumbnailOutputFormat = "png" | "jpeg" | "rgba";
 
 /** PNG color representations supported by the streaming encoder. */
 export type PngColorMode = "auto" | "rgba8" | "rgb8" | "grayscale-alpha8" | "grayscale8";
@@ -38,6 +39,16 @@ export interface PngOptions {
     filter?: PngFilter;
 }
 
+/** JPEG chroma-subsampling modes. */
+export type JpegSubsampling = "420" | "422" | "444";
+
+/** Settings used only when output is "jpeg". */
+export interface JpegOptions {
+    quality?: number;
+    background?: [number, number, number];
+    subsampling?: JpegSubsampling;
+}
+
 /** Options and resource limits for thumbnail generation. */
 export interface ThumbnailOptions {
     maxWidth?: number;
@@ -47,6 +58,7 @@ export interface ThumbnailOptions {
     allowUpscale?: boolean;
     output?: ThumbnailOutputFormat;
     png?: PngOptions;
+    jpeg?: JpegOptions;
     maxInputBytes?: number;
     maxInputWidth?: number;
     maxInputHeight?: number;
@@ -57,7 +69,7 @@ export interface ThumbnailOptions {
     maxMemoryBytes?: number;
 }
 
-/** Creates a bounded PNG or RGBA thumbnail from encoded PNG bytes. */
+/** Creates a bounded PNG, JPEG, or RGBA thumbnail from encoded PNG bytes. */
 export function thumbnailPng(
     input: Uint8Array,
     options?: ThumbnailOptions | null,
@@ -82,12 +94,13 @@ pub fn wasm_memory_bytes() -> u32 {
     buffer.byte_length()
 }
 
-/// Creates a bounded PNG or RGBA thumbnail from encoded PNG bytes.
+/// Creates a bounded PNG, JPEG, or RGBA thumbnail from encoded PNG bytes.
 #[wasm_bindgen(js_name = thumbnailPng, skip_typescript)]
 pub fn thumbnail_png(input: &[u8], options: &JsValue) -> Result<ThumbnailResult, JsError> {
-    let (options, png_options) = parse_options(options)?;
+    let (options, png_options, jpeg_options) = parse_options(options)?;
     let output = match options.output {
         OutputFormat::Png => create_thumbnail_with_png_options(input, &options, &png_options),
+        OutputFormat::Jpeg => create_thumbnail_with_jpeg_options(input, &options, &jpeg_options),
         OutputFormat::Rgba => create_thumbnail(input, &options),
     }
     .map_err(|error| JsError::new(&error.to_string()))?;
@@ -106,7 +119,7 @@ pub struct ThumbnailResult {
 
 #[wasm_bindgen]
 impl ThumbnailResult {
-    /// Returns a copy of the encoded PNG or raw RGBA bytes.
+    /// Returns a copy of the encoded image or raw RGBA bytes.
     #[wasm_bindgen(getter)]
     pub fn bytes(&self) -> Vec<u8> {
         self.bytes.clone()
@@ -141,12 +154,13 @@ impl ThumbnailResult {
                 width,
                 height,
                 mime_type,
+                format,
             } => Self {
                 bytes,
                 width,
                 height,
                 mime_type: mime_type.to_owned(),
-                format: "png".to_owned(),
+                format: output_format_name(format).to_owned(),
             },
             ThumbnailOutput::Rgba {
                 pixels,
@@ -165,10 +179,10 @@ impl ThumbnailResult {
     }
 }
 
-fn parse_options(value: &JsValue) -> Result<(ThumbnailOptions, PngOptions), JsError> {
+fn parse_options(value: &JsValue) -> Result<(ThumbnailOptions, PngOptions, JpegOptions), JsError> {
     let mut options = ThumbnailOptions::default();
     if value.is_null() || value.is_undefined() {
-        return Ok((options, PngOptions::default()));
+        return Ok((options, PngOptions::default(), JpegOptions::default()));
     }
     if !value.is_object() {
         return Err(JsError::new("thumbnail options must be an object"));
@@ -198,8 +212,13 @@ fn parse_options(value: &JsValue) -> Result<(ThumbnailOptions, PngOptions), JsEr
     if let Some(output) = optional_string(value, "output")? {
         options.output = match output.as_str() {
             "png" => OutputFormat::Png,
+            "jpeg" => OutputFormat::Jpeg,
             "rgba" => OutputFormat::Rgba,
-            _ => return Err(JsError::new("output must be \"png\" or \"rgba\"")),
+            _ => {
+                return Err(JsError::new(
+                    "output must be \"png\", \"jpeg\", or \"rgba\"",
+                ));
+            }
         };
     }
     let png_value = optional_property(value, "png")?;
@@ -209,6 +228,15 @@ fn parse_options(value: &JsValue) -> Result<(ThumbnailOptions, PngOptions), JsEr
     let png_options = png_value
         .as_ref()
         .map(parse_png_options)
+        .transpose()?
+        .unwrap_or_default();
+    let jpeg_value = optional_property(value, "jpeg")?;
+    if jpeg_value.is_some() && options.output != OutputFormat::Jpeg {
+        return Err(JsError::new("jpeg options require output \"jpeg\""));
+    }
+    let jpeg_options = jpeg_value
+        .as_ref()
+        .map(parse_jpeg_options)
         .transpose()?
         .unwrap_or_default();
 
@@ -238,7 +266,7 @@ fn parse_options(value: &JsValue) -> Result<(ThumbnailOptions, PngOptions), JsEr
             .map_err(|_| JsError::new("maxMemoryBytes is too large for this WebAssembly build"))?;
     }
 
-    Ok((options, png_options))
+    Ok((options, png_options, jpeg_options))
 }
 
 fn parse_png_options(value: &JsValue) -> Result<PngOptions, JsError> {
@@ -292,6 +320,72 @@ fn parse_png_options(value: &JsValue) -> Result<PngOptions, JsError> {
         };
     }
     Ok(options)
+}
+
+fn parse_jpeg_options(value: &JsValue) -> Result<JpegOptions, JsError> {
+    if !value.is_object() || js_sys::Array::is_array(value) {
+        return Err(JsError::new("jpeg must be an object"));
+    }
+    let mut options = JpegOptions::default();
+    if let Some(quality) = optional_u64(value, "quality")? {
+        options.quality = u8::try_from(quality)
+            .ok()
+            .filter(|quality| (1..=100).contains(quality))
+            .ok_or_else(|| JsError::new("jpeg.quality must be an integer from 1 through 100"))?;
+    }
+    if let Some(background) = optional_property(value, "background")? {
+        options.background = parse_rgb(&background)?;
+    }
+    if let Some(subsampling) = optional_string(value, "subsampling")? {
+        options.subsampling = match subsampling.as_str() {
+            "420" => JpegSubsampling::S420,
+            "422" => JpegSubsampling::S422,
+            "444" => JpegSubsampling::S444,
+            _ => {
+                return Err(JsError::new(
+                    "jpeg.subsampling must be \"420\", \"422\", or \"444\"",
+                ));
+            }
+        };
+    }
+    Ok(options)
+}
+
+fn parse_rgb(value: &JsValue) -> Result<[u8; 3], JsError> {
+    if !js_sys::Array::is_array(value) {
+        return Err(JsError::new(
+            "jpeg.background must be a three-element RGB array",
+        ));
+    }
+    let values = js_sys::Array::from(value);
+    if values.length() != 3 {
+        return Err(JsError::new(
+            "jpeg.background must be a three-element RGB array",
+        ));
+    }
+    let mut rgb = [0_u8; 3];
+    for (index, channel) in rgb.iter_mut().enumerate() {
+        let number = values
+            .get(index as u32)
+            .as_f64()
+            .filter(|number| number.is_finite() && number.fract() == 0.0)
+            .ok_or_else(|| JsError::new("jpeg.background channels must be integers"))?;
+        if !(0.0..=255.0).contains(&number) {
+            return Err(JsError::new(
+                "jpeg.background channels must be between 0 and 255",
+            ));
+        }
+        *channel = number as u8;
+    }
+    Ok(rgb)
+}
+
+const fn output_format_name(format: OutputFormat) -> &'static str {
+    match format {
+        OutputFormat::Png => "png",
+        OutputFormat::Jpeg => "jpeg",
+        OutputFormat::Rgba => "rgba",
+    }
 }
 
 fn optional_property(object: &JsValue, name: &str) -> Result<Option<JsValue>, JsError> {
@@ -426,6 +520,49 @@ mod browser_tests {
     }
 
     #[wasm_bindgen_test]
+    fn creates_jpeg_output_with_nested_options() {
+        let options = Object::new();
+        Reflect::set(
+            options.as_ref(),
+            &JsValue::from_str("output"),
+            &JsValue::from_str("jpeg"),
+        )
+        .expect("the thumbnail options object must be writable");
+        let jpeg = Object::new();
+        Reflect::set(
+            jpeg.as_ref(),
+            &JsValue::from_str("quality"),
+            &JsValue::from_f64(92.0),
+        )
+        .expect("the JPEG options object must be writable");
+        Reflect::set(
+            jpeg.as_ref(),
+            &JsValue::from_str("subsampling"),
+            &JsValue::from_str("444"),
+        )
+        .expect("the JPEG options object must be writable");
+        let background = js_sys::Array::new();
+        for channel in [10, 100, 220] {
+            background.push(&JsValue::from_f64(f64::from(channel)));
+        }
+        Reflect::set(
+            jpeg.as_ref(),
+            &JsValue::from_str("background"),
+            background.as_ref(),
+        )
+        .expect("the JPEG options object must be writable");
+        Reflect::set(options.as_ref(), &JsValue::from_str("jpeg"), jpeg.as_ref())
+            .expect("the thumbnail options object must be writable");
+
+        let result = thumbnail_png(PNG_INPUT, options.as_ref()).expect("thumbnail must succeed");
+        let bytes = result.bytes();
+        assert_eq!(result.mime_type(), "image/jpeg");
+        assert_eq!(result.format(), "jpeg");
+        assert_eq!(&bytes[..2], &[0xff, 0xd8]);
+        assert_eq!(&bytes[bytes.len() - 2..], &[0xff, 0xd9]);
+    }
+
+    #[wasm_bindgen_test]
     fn reports_invalid_browser_options() {
         match thumbnail_png(PNG_INPUT, &JsValue::from_str("invalid")) {
             Ok(_) => panic!("non-object options must fail"),
@@ -475,7 +612,7 @@ mod browser_tests {
             ("allowUpscale", JsValue::from_str("true")),
             ("fit", JsValue::from_str("cover")),
             ("filter", JsValue::from_str("nearest")),
-            ("output", JsValue::from_str("jpeg")),
+            ("output", JsValue::from_str("webp")),
         ];
 
         for (name, value) in cases {
@@ -509,5 +646,24 @@ mod browser_tests {
         )
         .expect("the thumbnail options object must be writable");
         assert!(thumbnail_png(PNG_INPUT, rgba.as_ref()).is_err());
+
+        let png = Object::new();
+        Reflect::set(
+            png.as_ref(),
+            &JsValue::from_str("jpeg"),
+            Object::new().as_ref(),
+        )
+        .expect("the thumbnail options object must be writable");
+        assert!(thumbnail_png(PNG_INPUT, png.as_ref()).is_err());
+
+        let jpeg_output = options_with("output", &JsValue::from_str("jpeg"));
+        let jpeg = options_with("quality", &JsValue::from_f64(0.0));
+        Reflect::set(
+            jpeg_output.as_ref(),
+            &JsValue::from_str("jpeg"),
+            jpeg.as_ref(),
+        )
+        .expect("the thumbnail options object must be writable");
+        assert!(thumbnail_png(PNG_INPUT, jpeg_output.as_ref()).is_err());
     }
 }

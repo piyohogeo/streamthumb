@@ -1,5 +1,10 @@
 # streamthumb — Streaming Output Extension Handoff
 
+Implementation status: the row-sink refactor, streaming PNG encoder, PNG
+configuration, JPEG encoder selection revision, and baseline JPEG output are
+implemented on the current working branch. Historical “current” descriptions
+below refer to the handoff baseline before these phases began.
+
 ## 0. Purpose
 
 This document hands off the next implementation phase of `streamthumb` to Codex.

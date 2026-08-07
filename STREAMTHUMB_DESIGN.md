@@ -983,7 +983,7 @@ streamthumb
 Suggested description:
 
 ```text
-Memory-bounded streaming PNG thumbnail generation for Rust and WebAssembly.
+Memory-bounded PNG thumbnail generation with PNG and JPEG output for Rust and WebAssembly.
 ```
 
 Suggested topics:
@@ -993,6 +993,7 @@ rust
 webassembly
 wasm
 png
+jpeg
 thumbnail
 image-processing
 streaming
@@ -1281,4 +1282,13 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 2. The selected streaming encoder accepts individual RGB rows, retains one MCU row, writes to the existing bounded output writer, exposes quality and subsampling, emits baseline sequential JPEG, forbids unsafe code in the selected feature set, and builds for `wasm32-unknown-unknown`.
 3. `jpeg-encoder` 0.6.1 remains faster in the isolated 512 x 512 spike but requires a complete input image. Its encoder-driven `ImageBuffer` callback cannot consume the existing push-oriented `RgbaRowSink` without retaining the output frame.
 4. The isolated spike is excluded from the production workspace and pins its candidate versions. It verifies baseline markers, one-row-at-a-time input, bounded-writer failure, native execution, and WebAssembly execution without adding a production JPEG dependency.
-5. The selected dependency is young and discloses incomplete human audit. Production adoption requires an exact version pin, independent multi-decoder validation, fuzz coverage, and reviewed dependency upgrades.
+5. The selected dependency is young and discloses incomplete human audit. Production adoption requires an exact version pin, independent decoder validation, fuzz coverage, and reviewed dependency upgrades. The spike decision is provisional until those PR 5 checks pass.
+
+### Phase 28 decisions
+
+1. Independent PR 5 decoding rejected the provisional `mozjpeg-rs` 0.9.2 selection. Its streaming path decoded solid colors incorrectly and could panic at quality 99 or 100. Source review found that it applies unscaled quantization to DCT coefficients represented at eight-times scale in three streaming call sites.
+2. Production uses `jpeg-encoder` 0.6.1 with default features disabled and only `std` enabled. Streamthumb bounds the whole-image API to one MCU row per call, then joins the entropy segments with a DRI marker and rotating restart markers. This retains 16 RGB rows for 4:2:0 or 8 rows for 4:2:2 and 4:4:4 without a complete RGB frame.
+3. `streamthumb-encode` owns the shared bounded writer and JPEG row sink. PNG encoding remains in `streamthumb-png`, which imports the shared writer; JPEG does not become a permanent responsibility of the PNG crate.
+4. JPEG output is baseline sequential with fixed Huffman tables. Public options cover quality 1 through 100, a three-channel compositing background, and 4:2:0, 4:2:2, or 4:4:4 subsampling. Width and height are limited to the baseline header's 65,535-pixel range.
+5. Ordered and Adam7 inputs share the same JPEG sink. Independent decoder tests cover multiple MCU rows, all subsampling modes, quality 100, alpha compositing, limits, and lossy pixel tolerances. A dedicated-worker WebAssembly test covers the browser build.
+6. `jpeg-encoder` declares Rust 1.61, so the workspace retains Rust 1.85. Memory planning includes the RGB MCU input, encoder plane and coefficient allowances, one bounded temporary entropy segment, and the complete bounded encoded result.

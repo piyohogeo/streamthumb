@@ -26,7 +26,7 @@ const expectedManifest = {
   license: "MIT OR Apache-2.0",
   type: "module",
   description:
-    "Memory-bounded streaming PNG thumbnail generation for WebAssembly",
+    "Memory-bounded PNG thumbnail generation with PNG and JPEG output for WebAssembly",
   main: "./streamthumb_wasm.js",
   module: "./streamthumb_wasm.js",
   types: "./streamthumb_wasm.d.ts",
@@ -74,7 +74,7 @@ for (const [key, value] of Object.entries(expectedStructuredMetadata)) {
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version)) {
   throw new Error(`package.json version is not a supported semantic version: ${manifest.version}`);
 }
-const expectedKeywords = ["png", "thumbnail", "webassembly", "wasm", "image"];
+const expectedKeywords = ["png", "jpeg", "thumbnail", "webassembly", "wasm", "image"];
 if (JSON.stringify(manifest.keywords) !== JSON.stringify(expectedKeywords)) {
   throw new Error("package.json keywords do not match the release contract.");
 }
@@ -105,11 +105,13 @@ const declarationContract = [
   "export interface ThumbnailOptions",
   'export type ThumbnailFit = "contain";',
   'export type ThumbnailFilter = "area";',
-  'export type ThumbnailOutputFormat = "png" | "rgba";',
+  'export type ThumbnailOutputFormat = "png" | "jpeg" | "rgba";',
   'export type PngColorMode = "auto" | "rgba8" | "rgb8" | "grayscale-alpha8" | "grayscale8";',
   'export type PngCompression = "none" | "fastest" | "fast" | "balanced" | "high";',
   'export type PngFilter = "default" | "none" | "sub" | "up" | "average" | "paeth" | "adaptive" | "min-entropy";',
   "export interface PngOptions",
+  'export type JpegSubsampling = "420" | "422" | "444";',
+  "export interface JpegOptions",
   "options?: ThumbnailOptions | null,",
   "export class ThumbnailResult",
   "[Symbol.dispose](): void;",

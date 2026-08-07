@@ -1,6 +1,6 @@
 use streamthumb_core::{OutputFormat, RgbaImage, ThumbnailInfo};
 
-/// A thumbnail returned as raw pixels or an encoded PNG.
+/// A thumbnail returned as raw pixels or an encoded image.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ThumbnailOutput {
@@ -9,6 +9,7 @@ pub enum ThumbnailOutput {
         width: u32,
         height: u32,
         mime_type: &'static str,
+        format: OutputFormat,
     },
     Rgba {
         pixels: Vec<u8>,
@@ -21,10 +22,15 @@ impl ThumbnailOutput {
     /// Returns metadata shared by both output representations.
     pub const fn info(&self) -> ThumbnailInfo {
         match self {
-            Self::Encoded { width, height, .. } => ThumbnailInfo {
+            Self::Encoded {
+                width,
+                height,
+                format,
+                ..
+            } => ThumbnailInfo {
                 width: *width,
                 height: *height,
-                format: OutputFormat::Png,
+                format: *format,
             },
             Self::Rgba { width, height, .. } => ThumbnailInfo {
                 width: *width,

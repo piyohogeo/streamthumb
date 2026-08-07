@@ -63,7 +63,7 @@ const generatedFiles = [
 Object.assign(manifest, {
   name: "@streamthumb/wasm",
   description:
-    "Memory-bounded streaming PNG thumbnail generation for WebAssembly",
+    "Memory-bounded PNG thumbnail generation with PNG and JPEG output for WebAssembly",
   repository: {
     type: "git",
     url: "git+https://github.com/piyohogeo/streamthumb.git",
@@ -71,7 +71,7 @@ Object.assign(manifest, {
   },
   homepage: "https://github.com/piyohogeo/streamthumb#readme",
   bugs: "https://github.com/piyohogeo/streamthumb/issues",
-  keywords: ["png", "thumbnail", "webassembly", "wasm", "image"],
+  keywords: ["png", "jpeg", "thumbnail", "webassembly", "wasm", "image"],
   files: [...generatedFiles, "README.md", "LICENSE-MIT", "LICENSE-APACHE"],
   main: "./streamthumb_wasm.js",
   module: "./streamthumb_wasm.js",

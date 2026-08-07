@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/streamthumb-core",
+    "crates/streamthumb-encode",
     "crates/streamthumb-cli",
     "crates/streamthumb-png",
     "crates/streamthumb-wasm",

@@ -17,8 +17,12 @@ pub enum Filter {
 /// The representation returned by the thumbnail operation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum OutputFormat {
+    /// A complete encoded PNG image.
     #[default]
     Png,
+    /// A complete baseline sequential JPEG image.
+    Jpeg,
+    /// Tightly packed straight-alpha RGBA8 pixels.
     Rgba,
 }
 

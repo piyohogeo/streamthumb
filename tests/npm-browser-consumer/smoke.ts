@@ -6,6 +6,8 @@ import init, {
   type PngColorMode,
   type PngCompression,
   type PngFilter,
+  type JpegOptions,
+  type JpegSubsampling,
 } from "@streamthumb/wasm";
 
 const statusElement = document.querySelector<HTMLPreElement>("#status");
@@ -49,8 +51,15 @@ const options: ThumbnailOptions = {
 };
 
 // These assertions fail compilation if the public literal types become broad.
-// @ts-expect-error JPEG output is not supported.
-const invalidOutput: ThumbnailOptions = { output: "jpeg" };
+const jpegSubsampling: JpegSubsampling = "420";
+const jpegOptions: JpegOptions = {
+  quality: 85,
+  background: [255, 255, 255],
+  subsampling: jpegSubsampling,
+};
+const jpegOutput: ThumbnailOptions = { output: "jpeg", jpeg: jpegOptions };
+// @ts-expect-error WebP output is not supported.
+const invalidOutput: ThumbnailOptions = { output: "webp" };
 // @ts-expect-error Width must be numeric.
 const invalidWidth: ThumbnailOptions = { maxWidth: "32" };
 // @ts-expect-error Indexed PNG output is not supported.
@@ -58,6 +67,7 @@ const invalidPngColor: ThumbnailOptions = { png: { color: "indexed8" } };
 void invalidOutput;
 void invalidWidth;
 void invalidPngColor;
+void jpegOutput;
 
 try {
   await init();

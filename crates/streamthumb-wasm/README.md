@@ -1,6 +1,6 @@
 # streamthumb-wasm
 
-WebAssembly bindings for the memory-bounded `streamthumb` PNG thumbnail pipeline.
+WebAssembly bindings for the memory-bounded `streamthumb` PNG-input thumbnail pipeline.
 
 ## Installation
 
@@ -42,7 +42,11 @@ const bytes = result.bytes;
 result.free();
 ```
 
-`output: "png"` returns encoded PNG bytes with MIME type `image/png`. `output: "rgba"` returns tightly packed, straight-alpha RGBA8 pixels with MIME type `application/octet-stream`.
+`output: "png"` returns encoded PNG bytes with MIME type `image/png`.
+`output: "jpeg"` returns baseline JPEG bytes with MIME type `image/jpeg`; a
+nested `jpeg` object configures quality, RGB alpha-compositing background, and
+`"420"`, `"422"`, or `"444"` subsampling. `output: "rgba"` returns tightly
+packed, straight-alpha RGBA8 pixels with MIME type `application/octet-stream`.
 
 Area filtering uses premultiplied alpha but averages color channels in their
 encoded sample space. The package does not perform linear-light conversion or
@@ -50,8 +54,8 @@ ICC color management, and encoded output does not inherit source PNG color
 metadata.
 
 The package exports `ThumbnailOptions`, `ThumbnailFit`, `ThumbnailFilter`,
-`ThumbnailOutputFormat`, `PngOptions`, `PngColorMode`, `PngCompression`, and
-`PngFilter` TypeScript types. Every option is optional, and `thumbnailPng` also
+`ThumbnailOutputFormat`, `PngOptions`, `PngColorMode`, `PngCompression`,
+`PngFilter`, `JpegOptions`, and `JpegSubsampling` TypeScript types. Every option is optional, and `thumbnailPng` also
 accepts an omitted or `null` options value. PNG output remains RGBA8 by default;
 the nested `png` object can select automatic or explicit 8-bit color output,
 compression, and scanline filtering.

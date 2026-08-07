@@ -5,6 +5,7 @@ use streamthumb_core::{
     AreaDownsampler, Dimensions, InputInfo, OutputFormat, ProcessingPlan, RgbaImage,
     SparseAreaDownsampler, ThumbnailOptions, plan_thumbnail, plan_thumbnail_sparse,
 };
+use streamthumb_encode::{JpegOptions, JpegRowSink};
 
 use crate::{
     Error, PngColorMode, PngOptions, Result, ThumbnailOutput, UnsupportedFeature,
@@ -168,6 +169,9 @@ pub fn thumbnail_png(input: &[u8], options: &ThumbnailOptions) -> Result<Thumbna
         OutputFormat::Png => {
             thumbnail_png_with_encoder_options(input, options, &PngOptions::default())
         }
+        OutputFormat::Jpeg => {
+            thumbnail_png_with_jpeg_options(input, options, &JpegOptions::default())
+        }
     }
 }
 
@@ -188,7 +192,67 @@ pub fn thumbnail_png_with_encoder_options(
         width: plan.output.width,
         height: plan.output.height,
         mime_type: "image/png",
+        format: OutputFormat::Png,
     })
+}
+
+/// Creates a JPEG thumbnail with codec-specific encoder settings.
+///
+/// JPEG settings are rejected unless JPEG output is requested.
+pub fn thumbnail_png_with_jpeg_options(
+    input: &[u8],
+    options: &ThumbnailOptions,
+    jpeg_options: &JpegOptions,
+) -> Result<ThumbnailOutput> {
+    if options.output != OutputFormat::Jpeg {
+        return Err(Error::InvalidJpegOptions(
+            "JPEG settings require JPEG output",
+        ));
+    }
+    let (bytes, plan) = thumbnail_jpeg_encoded(input, options, *jpeg_options)?;
+    Ok(ThumbnailOutput::Encoded {
+        bytes,
+        width: plan.output.width,
+        height: plan.output.height,
+        mime_type: "image/jpeg",
+        format: OutputFormat::Jpeg,
+    })
+}
+
+fn thumbnail_jpeg_encoded(
+    input: &[u8],
+    options: &ThumbnailOptions,
+    jpeg_options: JpegOptions,
+) -> Result<(Vec<u8>, ProcessingPlan)> {
+    let inspection = inspect_png(input, options)?;
+    if inspection.interlaced {
+        let (downsampler, plan) = thumbnail_png_adam7_downsampler(input, options)?;
+        let sink = JpegRowSink::new(plan.output, plan.memory.encoded_output_bytes, jpeg_options)?;
+        return Ok((downsampler.finish_into(sink)?, plan));
+    }
+
+    let mut downsampler: Option<AreaDownsampler<JpegRowSink>> = None;
+    let decoded = decode_png_rows(input, options, |row| {
+        if downsampler.is_none() {
+            let sink = JpegRowSink::new(
+                row.plan.output,
+                row.plan.memory.encoded_output_bytes,
+                jpeg_options,
+            )?;
+            downsampler = Some(AreaDownsampler::with_sink(
+                row.plan.source,
+                row.plan.output,
+                sink,
+            )?);
+        }
+        let active = downsampler.as_mut().ok_or_else(|| {
+            Error::DecodeFailure("failed to initialize the JPEG row sink".to_owned())
+        })?;
+        active.push_row(row.y, row.pixels)?;
+        Ok(())
+    })?;
+    let bytes = downsampler.ok_or(Error::TruncatedInput)?.finish()?;
+    Ok((bytes, decoded.plan))
 }
 
 fn thumbnail_png_encoded(
@@ -1207,7 +1271,7 @@ fn map_decode_error(error: png::DecodingError, decoder_limit: usize) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PngCompression, PngFilter};
+    use crate::{JpegSubsampling, PngCompression, PngFilter};
     use flate2::{Compression, write::ZlibEncoder};
     use png::Filter;
     use std::io::Write;
@@ -1239,6 +1303,14 @@ mod tests {
         let info = reader.next_frame(&mut pixels).unwrap();
         pixels.truncate(info.buffer_size());
         (color, pixels)
+    }
+
+    fn decode_raw_jpeg(encoded: &[u8]) -> (u16, u16, Vec<u8>) {
+        let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(encoded));
+        let pixels = decoder.decode().unwrap();
+        let info = decoder.info().unwrap();
+        assert_eq!(info.pixel_format, jpeg_decoder::PixelFormat::RGB24);
+        (info.width, info.height, pixels)
     }
 
     fn encoded_bytes(output: ThumbnailOutput) -> Vec<u8> {
@@ -2314,6 +2386,7 @@ mod tests {
             width,
             height,
             mime_type,
+            ..
         } = output
         else {
             panic!("expected encoded PNG output");
@@ -2324,6 +2397,78 @@ mod tests {
         let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut pixels).unwrap();
         assert_eq!(&pixels[..info.buffer_size()], &[0, 0, 255, 128]);
+    }
+
+    #[test]
+    fn streaming_jpeg_decodes_for_ordered_and_adam7_inputs() {
+        let width = 17;
+        let height = 33;
+        let pixels = (0..width * height)
+            .flat_map(|index| {
+                let value = u8::try_from(index % 251).unwrap();
+                [value, value.wrapping_mul(3), value.wrapping_mul(7), 255]
+            })
+            .collect::<Vec<_>>();
+        let ordered = encode_png(
+            width,
+            height,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::Paeth,
+            &pixels,
+        );
+        let adam7 = encode_adam7_png(width, height, ColorType::Rgba, &pixels);
+        let options = ThumbnailOptions {
+            max_width: width,
+            max_height: height,
+            output: OutputFormat::Jpeg,
+            ..default_options()
+        };
+        let jpeg_options = JpegOptions {
+            quality: 100,
+            subsampling: JpegSubsampling::S444,
+            ..JpegOptions::default()
+        };
+
+        for input in [&ordered, &adam7] {
+            let output = thumbnail_png_with_jpeg_options(input, &options, &jpeg_options).unwrap();
+            assert_eq!(output.info().format, OutputFormat::Jpeg);
+            assert!(matches!(
+                &output,
+                ThumbnailOutput::Encoded {
+                    mime_type: "image/jpeg",
+                    ..
+                }
+            ));
+            let (actual_width, actual_height, actual) = decode_raw_jpeg(&encoded_bytes(output));
+            assert_eq!((actual_width, actual_height), (17, 33));
+            for (actual, expected) in actual.chunks_exact(3).zip(pixels.chunks_exact(4)) {
+                for channel in 0..3 {
+                    assert!(
+                        actual[channel].abs_diff(expected[channel]) <= 4,
+                        "channel {channel}: actual {}, expected {}",
+                        actual[channel],
+                        expected[channel]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jpeg_settings_require_jpeg_output() {
+        let input = encode_png(
+            1,
+            1,
+            ColorType::Rgb,
+            BitDepth::Eight,
+            Filter::NoFilter,
+            &[1, 2, 3],
+        );
+        assert!(matches!(
+            thumbnail_png_with_jpeg_options(&input, &default_options(), &JpegOptions::default()),
+            Err(Error::InvalidJpegOptions(_))
+        ));
     }
 
     #[test]

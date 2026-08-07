@@ -5,15 +5,15 @@ use std::hint::black_box;
 use libfuzzer_sys::fuzz_target;
 use streamthumb_core::{OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
-    PngColorMode, PngCompression, PngFilter, PngOptions, thumbnail_png,
-    thumbnail_png_with_encoder_options,
+    JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngOptions,
+    thumbnail_png, thumbnail_png_with_encoder_options, thumbnail_png_with_jpeg_options,
 };
 
 fuzz_target!(|data: &[u8]| {
-    let output = if data.last().is_some_and(|byte| byte & 1 == 0) {
-        OutputFormat::Rgba
-    } else {
-        OutputFormat::Png
+    let output = match data.last().copied().unwrap_or_default() % 3 {
+        0 => OutputFormat::Rgba,
+        1 => OutputFormat::Png,
+        _ => OutputFormat::Jpeg,
     };
     let mut options = ThumbnailOptions {
         max_width: 64,
@@ -56,10 +56,23 @@ fuzz_target!(|data: &[u8]| {
             _ => PngFilter::MinEntropy,
         },
     };
-    let result = if output == OutputFormat::Png {
-        thumbnail_png_with_encoder_options(data, &options, &png_options)
-    } else {
-        thumbnail_png(data, &options)
+    let jpeg_options = JpegOptions {
+        quality: data.get(3).copied().unwrap_or_default() % 100 + 1,
+        background: [
+            data.get(4).copied().unwrap_or(255),
+            data.get(5).copied().unwrap_or(255),
+            data.get(6).copied().unwrap_or(255),
+        ],
+        subsampling: match data.get(7).copied().unwrap_or_default() % 3 {
+            0 => JpegSubsampling::S420,
+            1 => JpegSubsampling::S422,
+            _ => JpegSubsampling::S444,
+        },
+    };
+    let result = match output {
+        OutputFormat::Png => thumbnail_png_with_encoder_options(data, &options, &png_options),
+        OutputFormat::Jpeg => thumbnail_png_with_jpeg_options(data, &options, &jpeg_options),
+        OutputFormat::Rgba => thumbnail_png(data, &options),
     };
     let _ = black_box(result);
 });

@@ -25,8 +25,9 @@ try {
 
     Get-ChildItem -LiteralPath $corpusDirectory -Filter "*.png" | Sort-Object Name | ForEach-Object {
         $inputFile = $_.FullName
-        foreach ($method in @("streamthumb", "image-rs")) {
-            $outputFile = Join-Path $resultsDirectory "$($_.BaseName)-$method.png"
+        foreach ($method in @("streamthumb-png", "streamthumb-jpeg", "image-rs")) {
+            $extension = if ($method -eq "streamthumb-jpeg") { "jpg" } else { "png" }
+            $outputFile = Join-Path $resultsDirectory "$($_.BaseName)-$method.$extension"
             $stdoutFile = Join-Path $env:TEMP "streamthumb-benchmark-stdout-$PID.txt"
             $stderrFile = Join-Path $env:TEMP "streamthumb-benchmark-stderr-$PID.txt"
             try {

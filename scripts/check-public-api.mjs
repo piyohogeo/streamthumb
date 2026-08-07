@@ -22,6 +22,7 @@ const optionDefaults = [
   ["allowUpscale", "`false`"],
   ["output", "`\"png\"`"],
   ["png", "RGBA8, balanced compression, default filter"],
+  ["jpeg", "quality 85, white background, 4:2:0"],
   ["maxInputBytes", "`67,108,864` (64 MiB)"],
   ["maxInputWidth", "`100,000`"],
   ["maxInputHeight", "`100,000`"],
@@ -82,6 +83,19 @@ for (const implementationDefault of [
     pngOptions,
     implementationDefault,
     "crates/streamthumb-png/src/options.rs",
+  );
+}
+
+const jpegOptions = await source("crates/streamthumb-encode/src/jpeg.rs");
+for (const implementationDefault of [
+  "quality: 85",
+  "background: [255, 255, 255]",
+  "subsampling: JpegSubsampling::S420",
+]) {
+  requireText(
+    jpegOptions,
+    implementationDefault,
+    "crates/streamthumb-encode/src/jpeg.rs",
   );
 }
 

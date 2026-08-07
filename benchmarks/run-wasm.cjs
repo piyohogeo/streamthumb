@@ -3,7 +3,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { performance } = require("node:perf_hooks");
 
-function measureOne(packageDirectory, inputPath, maxDimensionText) {
+function measureOne(packageDirectory, inputPath, maxDimensionText, format) {
   const streamthumb = require(path.resolve(packageDirectory));
   const wasmBinaryBytes = fs
     .readdirSync(packageDirectory)
@@ -19,14 +19,15 @@ function measureOne(packageDirectory, inputPath, maxDimensionText) {
   const result = streamthumb.thumbnailPng(input, {
     maxWidth: maxDimension,
     maxHeight: maxDimension,
-    output: "png",
+    output: format,
+    maxMemoryBytes: 512 * 1024 * 1024,
   });
   const runtimeMs = performance.now() - started;
   const bytes = result.bytes;
   const memoryAfter = streamthumb.wasmMemoryBytes();
   const dimensions = path.basename(inputPath).match(/-(\d+)x(\d+)\.png$/);
   const record = {
-    method: "streamthumb-wasm",
+    method: `streamthumb-wasm-${format}`,
     input: inputPath,
     encoded_input_bytes: input.length,
     source_width: dimensions ? Number(dimensions[1]) : null,
@@ -53,14 +54,16 @@ function runParent(packageDirectory, corpusDirectory, resultFile, maxDimensionTe
   try {
     for (const file of files) {
       const inputPath = path.join(corpusDirectory, file);
-      const child = spawnSync(process.execPath, [__filename, packageDirectory, inputPath, maxDimensionText], {
-        encoding: "utf8",
-        env: { ...process.env, STREAMTHUMB_BENCHMARK_CHILD: "1" },
-      });
-      if (child.status !== 0) {
-        throw new Error(`WASM benchmark failed for ${inputPath}: ${child.stderr}`);
+      for (const format of ["png", "jpeg"]) {
+        const child = spawnSync(process.execPath, [__filename, packageDirectory, inputPath, maxDimensionText, format], {
+          encoding: "utf8",
+          env: { ...process.env, STREAMTHUMB_BENCHMARK_CHILD: "1" },
+        });
+        if (child.status !== 0) {
+          throw new Error(`WASM ${format} benchmark failed for ${inputPath}: ${child.stderr}`);
+        }
+        fs.writeSync(output, child.stdout);
       }
-      fs.writeSync(output, child.stdout);
     }
   } finally {
     fs.closeSync(output);
@@ -68,8 +71,11 @@ function runParent(packageDirectory, corpusDirectory, resultFile, maxDimensionTe
 }
 
 if (process.env.STREAMTHUMB_BENCHMARK_CHILD === "1") {
-  const [packageDirectory, inputPath, maxDimensionText = "512"] = process.argv.slice(2);
-  measureOne(packageDirectory, inputPath, maxDimensionText);
+  const [packageDirectory, inputPath, maxDimensionText = "512", format = "png"] = process.argv.slice(2);
+  if (format !== "png" && format !== "jpeg") {
+    throw new Error("format must be png or jpeg");
+  }
+  measureOne(packageDirectory, inputPath, maxDimensionText, format);
 } else {
   const [packageDirectory, corpusDirectory, resultFile, maxDimensionText = "512"] = process.argv.slice(2);
   if (!packageDirectory || !corpusDirectory || !resultFile) {

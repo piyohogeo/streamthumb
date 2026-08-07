@@ -23,8 +23,10 @@ cargo build --release --manifest-path benchmarks/Cargo.toml
 
 for input_file in "$corpus_directory"/*.png; do
   base_name="$(basename "$input_file" .png)"
-  for method in streamthumb image-rs; do
-    output_file="$results_directory/$base_name-$method.png"
+  for method in streamthumb-png streamthumb-jpeg image-rs; do
+    extension="png"
+    if [ "$method" = "streamthumb-jpeg" ]; then extension="jpg"; fi
+    output_file="$results_directory/$base_name-$method.$extension"
     stdout_file="$(mktemp)"
     time_file="$(mktemp)"
     /usr/bin/time -f '%M' -o "$time_file" \

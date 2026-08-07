@@ -6,6 +6,12 @@ const VERTICAL_ACCUMULATOR_BYTES_PER_PIXEL: usize = 5 * size_of::<u128>();
 const SPARSE_ACCUMULATOR_BYTES_PER_PIXEL: usize = 5 * size_of::<u128>();
 const DECODER_STAGING_BYTES: usize = 160 * 1024;
 const PNG_ENCODER_STATE_BYTES: usize = 128 * 1024;
+const JPEG_FIXED_ENCODER_STATE_BYTES: usize = 64 * 1024;
+const JPEG_MCU_ROWS: usize = 16;
+const JPEG_RGB_PIXEL_BYTES: usize = 3;
+const JPEG_INTERNAL_BYTES_PER_PIXEL: usize = 12;
+const JPEG_MAX_ENCODED_BYTES_PER_BLOCK: usize = 420;
+const JPEG_CONTAINER_ALLOWANCE_BYTES: usize = 64 * 1024;
 
 /// A conservative breakdown of buffers owned by the planned streaming path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,8 +34,8 @@ pub struct MemoryEstimate {
 /// The decoder allowance includes three packed source rows and conservative
 /// staging space for DEFLATE history and buffered decompressed data. Accumulator
 /// constants reserve four premultiplied `u128` color channels plus one weight per
-/// output pixel. Raw RGBA output retains the full result; encoded PNG output
-/// retains only one completed row while it is passed to the encoder.
+/// output pixel. Raw RGBA output retains the full result; encoded output retains
+/// one completed RGBA row plus only the codec-specific streaming state.
 pub fn estimate_working_memory(
     source: Dimensions,
     output: Dimensions,
@@ -87,6 +93,11 @@ pub fn estimate_working_memory_for_output(
             0,
             PNG_ENCODER_STATE_BYTES,
             estimate_encoded_png_bytes(output, raw_rgba_bytes)?,
+        ),
+        OutputFormat::Jpeg => (
+            0,
+            estimate_jpeg_encoder_state_bytes(output)?,
+            estimate_encoded_jpeg_bytes(output)?,
         ),
     };
 
@@ -164,6 +175,53 @@ fn estimate_encoded_png_bytes(output: Dimensions, rgba_bytes: usize) -> Result<u
         .ok_or_else(|| overflow("encoded PNG container allowance"))
 }
 
+fn estimate_jpeg_encoder_state_bytes(output: Dimensions) -> Result<usize> {
+    let width = usize::try_from(output.width).map_err(|_| overflow("JPEG output width"))?;
+    let mcu_rows_bytes = checked_product(
+        &[
+            width,
+            JPEG_MCU_ROWS,
+            JPEG_RGB_PIXEL_BYTES + JPEG_INTERNAL_BYTES_PER_PIXEL,
+        ],
+        "JPEG MCU row buffer",
+    )?;
+    let temporary_segment_bytes = estimate_encoded_jpeg_mcu_row_bytes(output)?;
+    checked_sum(
+        &[
+            JPEG_FIXED_ENCODER_STATE_BYTES,
+            mcu_rows_bytes,
+            temporary_segment_bytes,
+        ],
+        "JPEG encoder state",
+    )
+}
+
+fn estimate_encoded_jpeg_mcu_row_bytes(output: Dimensions) -> Result<usize> {
+    let block_columns = usize::try_from(output.width.div_ceil(8))
+        .map_err(|_| overflow("JPEG segment block columns"))?;
+    let color_blocks = checked_product(&[block_columns, 2, 3], "JPEG segment color block count")?;
+    checked_product(
+        &[color_blocks, JPEG_MAX_ENCODED_BYTES_PER_BLOCK],
+        "JPEG segment entropy allowance",
+    )?
+    .checked_add(JPEG_CONTAINER_ALLOWANCE_BYTES)
+    .ok_or_else(|| overflow("JPEG segment container allowance"))
+}
+
+fn estimate_encoded_jpeg_bytes(output: Dimensions) -> Result<usize> {
+    let block_columns =
+        usize::try_from(output.width.div_ceil(8)).map_err(|_| overflow("JPEG block columns"))?;
+    let block_rows =
+        usize::try_from(output.height.div_ceil(8)).map_err(|_| overflow("JPEG block rows"))?;
+    let color_blocks = checked_product(&[block_columns, block_rows, 3], "JPEG color block count")?;
+    checked_product(
+        &[color_blocks, JPEG_MAX_ENCODED_BYTES_PER_BLOCK],
+        "JPEG entropy allowance",
+    )?
+    .checked_add(JPEG_CONTAINER_ALLOWANCE_BYTES)
+    .ok_or_else(|| overflow("JPEG container allowance"))
+}
+
 fn checked_product(values: &[usize], operation: &'static str) -> Result<usize> {
     values.iter().try_fold(1_usize, |product, value| {
         product
@@ -236,6 +294,29 @@ mod tests {
         assert_eq!(estimate.output_row_bytes, 2_048 * 4);
         assert_eq!(estimate.output_rgba_bytes, 0);
         assert_eq!(estimate.total_bytes, 19_605_763);
+    }
+
+    #[test]
+    fn jpeg_output_is_bounded_by_width_and_encoded_size() {
+        let source = Dimensions::new(2_048, 2_048).unwrap();
+        let short = estimate_working_memory_for_output(
+            source,
+            Dimensions::new(2_048, 16).unwrap(),
+            4,
+            OutputFormat::Jpeg,
+        )
+        .unwrap();
+        let tall = estimate_working_memory_for_output(
+            source,
+            Dimensions::new(2_048, 2_048).unwrap(),
+            4,
+            OutputFormat::Jpeg,
+        )
+        .unwrap();
+
+        assert_eq!(short.output_rgba_bytes, 0);
+        assert_eq!(short.encoder_state_bytes, tall.encoder_state_bytes);
+        assert!(tall.encoded_output_bytes > short.encoded_output_bytes);
     }
 
     #[test]

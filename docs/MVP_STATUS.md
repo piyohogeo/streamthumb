@@ -14,8 +14,9 @@ version 0.1.0 before publication.
 | Premultiplied-alpha filtering | Complete | Transparent-edge and fully transparent pixel tests verify straight-alpha output without color halos. |
 | Malformed and oversized input rejection | Complete | Typed error tests cover truncation, malformed chunks, APNG, byte, dimension, pixel, output, decoder-memory, and working-memory limits. Fuzz targets cover rows, thumbnails, and the area downsampler. |
 | Configurable resource limits | Complete | Rust and WebAssembly APIs expose every required input, output, and working-memory limit. Defaults and documentation are checked together in CI. |
-| Rust-native CLI | Complete | `streamthumb-cli` produces bounded encoded PNG output and validates its arguments and input size. |
+| Rust-native CLI | Complete | `streamthumb-cli` produces bounded encoded PNG or JPEG output and validates codec-specific arguments and input size. |
 | PNG encoder configuration | Complete | Rust, WebAssembly, and CLI APIs expose 8-bit color mode, compression, and filter settings. Tests verify IHDR color types, decoded pixels, every compression/filter combination, Adam7 input, defaults, and invalid boundary values. |
+| JPEG output | Complete | Rust, WebAssembly, and CLI APIs expose baseline sequential JPEG with quality, compositing background, and 4:2:0/4:2:2/4:4:4 controls. Independent decoding covers ordered and Adam7 inputs, multiple MCU rows, quality 100, and limits. |
 | Browser WebAssembly package | Complete | Chrome and Firefox run worker-based wasm-bindgen tests. A separately installed tarball consumer and the public browser example run in headless Chrome. |
 | Node.js and Deno package use | Complete | CI installs the tarball into an isolated consumer and runs the public examples with explicit WebAssembly bytes. |
 | Cloudflare Worker adapter | Source complete; runtime deferred | The runtime-neutral adapter and local package reference are checked. Live-account validation is intentionally excluded because no Cloudflare account is available. |
@@ -50,12 +51,19 @@ backward-compatible default. Explicit RGB and grayscale conversion, safe
 metadata-driven automatic color selection, five compression presets, and eight
 filter strategies are covered by format and pixel tests.
 
+The fourth extension stage adds JPEG without reintroducing a complete resized
+RGBA frame. `streamthumb-encode` composites rows into an 8- or 16-row RGB MCU
+buffer, encodes one MCU row at a time, and joins entropy segments with standard
+restart markers. The final encoded bytes and each temporary segment are
+bounded. The encoder selection was revised after independent decoding exposed
+a correctness defect in the initially selected dependency; see
+`docs/JPEG_ENCODER_SELECTION.md`.
+
 ## Explicit limitations and deferred work
 
-- APNG, JPEG, WebP, AVIF, general transformations, additional filters, and an
-  incremental JavaScript input API are not currently implemented. JPEG output
-  is planned only after the row-streamed PNG path; the required PNG memory
-  evidence is now complete.
+- APNG, JPEG input, WebP, AVIF, general transformations, additional filters,
+  progressive JPEG, and an incremental JavaScript input API are not currently
+  implemented.
 - Resampling averages encoded color samples. It does not perform linear-light
   conversion or ICC color management, and encoded output does not inherit PNG
   color metadata.

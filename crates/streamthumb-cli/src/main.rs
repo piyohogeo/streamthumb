@@ -2,8 +2,8 @@ use std::{env, error::Error, fmt, fs, path::PathBuf, process::ExitCode};
 
 use streamthumb_core::{OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
-    PngColorMode, PngCompression, PngFilter, PngOptions, ThumbnailOutput,
-    thumbnail_png_with_encoder_options,
+    JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngOptions,
+    ThumbnailOutput, thumbnail_png_with_encoder_options, thumbnail_png_with_jpeg_options,
 };
 
 fn main() -> ExitCode {
@@ -28,10 +28,18 @@ fn run() -> Result<(), CliError> {
     }
 
     let input = fs::read(&config.input)?;
-    let output = thumbnail_png_with_encoder_options(&input, &config.options, &config.png_options)?;
+    let output = match config.options.output {
+        OutputFormat::Png => {
+            thumbnail_png_with_encoder_options(&input, &config.options, &config.png_options)
+        }
+        OutputFormat::Jpeg => {
+            thumbnail_png_with_jpeg_options(&input, &config.options, &config.jpeg_options)
+        }
+        OutputFormat::Rgba => unreachable!("the CLI does not expose raw RGBA output"),
+    }?;
     let ThumbnailOutput::Encoded { bytes, .. } = output else {
         return Err(CliError::Message(
-            "internal error: CLI requested a non-PNG output".to_owned(),
+            "internal error: CLI requested a non-encoded output".to_owned(),
         ));
     };
     fs::write(&config.output, bytes)?;
@@ -44,18 +52,22 @@ struct Config {
     output: PathBuf,
     options: ThumbnailOptions,
     png_options: PngOptions,
+    jpeg_options: JpegOptions,
 }
 
 impl Config {
     fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, CliError> {
         let mut arguments = arguments.into_iter();
         let input = arguments.next().ok_or_else(usage)?;
-        let output = arguments.next().ok_or_else(usage)?;
+        let output = PathBuf::from(arguments.next().ok_or_else(usage)?);
         let mut options = ThumbnailOptions {
-            output: OutputFormat::Png,
+            output: output_format_from_path(&output)?,
             ..ThumbnailOptions::default()
         };
         let mut png_options = PngOptions::default();
+        let mut jpeg_options = JpegOptions::default();
+        let mut png_options_configured = false;
+        let mut jpeg_options_configured = false;
 
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -66,7 +78,16 @@ impl Config {
                     options.max_height = parse_dimension(arguments.next(), "--max-height")?;
                 }
                 "--allow-upscale" => options.allow_upscale = true,
+                "--format" => {
+                    let value = required_value(arguments.next(), "--format")?;
+                    options.output = match value.as_str() {
+                        "png" => OutputFormat::Png,
+                        "jpeg" | "jpg" => OutputFormat::Jpeg,
+                        _ => return Err(invalid_choice("--format", &value)),
+                    };
+                }
                 "--png-color" => {
+                    png_options_configured = true;
                     let value = required_value(arguments.next(), "--png-color")?;
                     png_options.color = match value.as_str() {
                         "auto" => PngColorMode::Auto,
@@ -78,6 +99,7 @@ impl Config {
                     };
                 }
                 "--png-compression" => {
+                    png_options_configured = true;
                     let value = required_value(arguments.next(), "--png-compression")?;
                     png_options.compression = match value.as_str() {
                         "none" => PngCompression::NoCompression,
@@ -89,6 +111,7 @@ impl Config {
                     };
                 }
                 "--png-filter" => {
+                    png_options_configured = true;
                     let value = required_value(arguments.next(), "--png-filter")?;
                     png_options.filter = match value.as_str() {
                         "default" => PngFilter::Default,
@@ -102,6 +125,26 @@ impl Config {
                         _ => return Err(invalid_choice("--png-filter", &value)),
                     };
                 }
+                "--jpeg-quality" => {
+                    jpeg_options_configured = true;
+                    let value = required_value(arguments.next(), "--jpeg-quality")?;
+                    jpeg_options.quality = parse_jpeg_quality(&value)?;
+                }
+                "--jpeg-background" => {
+                    jpeg_options_configured = true;
+                    let value = required_value(arguments.next(), "--jpeg-background")?;
+                    jpeg_options.background = parse_background(&value)?;
+                }
+                "--jpeg-subsampling" => {
+                    jpeg_options_configured = true;
+                    let value = required_value(arguments.next(), "--jpeg-subsampling")?;
+                    jpeg_options.subsampling = match value.as_str() {
+                        "420" => JpegSubsampling::S420,
+                        "422" => JpegSubsampling::S422,
+                        "444" => JpegSubsampling::S444,
+                        _ => return Err(invalid_choice("--jpeg-subsampling", &value)),
+                    };
+                }
                 _ => {
                     return Err(CliError::Message(format!(
                         "unknown argument {argument:?}\n{}",
@@ -111,13 +154,63 @@ impl Config {
             }
         }
 
+        if png_options_configured && options.output != OutputFormat::Png {
+            return Err(CliError::Message(
+                "PNG options require PNG output".to_owned(),
+            ));
+        }
+        if jpeg_options_configured && options.output != OutputFormat::Jpeg {
+            return Err(CliError::Message(
+                "JPEG options require JPEG output".to_owned(),
+            ));
+        }
+
         Ok(Self {
             input: input.into(),
-            output: output.into(),
+            output,
             options,
             png_options,
+            jpeg_options,
         })
     }
+}
+
+fn output_format_from_path(path: &std::path::Path) -> Result<OutputFormat, CliError> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => Ok(OutputFormat::Png),
+        Some("jpg" | "jpeg") => Ok(OutputFormat::Jpeg),
+        _ => Err(CliError::Message(
+            "output extension must be .png, .jpg, or .jpeg; use --format to override a supported extension"
+                .to_owned(),
+        )),
+    }
+}
+
+fn parse_jpeg_quality(value: &str) -> Result<u8, CliError> {
+    value
+        .parse::<u8>()
+        .ok()
+        .filter(|quality| (1..=100).contains(quality))
+        .ok_or_else(|| CliError::Message("--jpeg-quality must be from 1 through 100".to_owned()))
+}
+
+fn parse_background(value: &str) -> Result<[u8; 3], CliError> {
+    let hex = value.strip_prefix('#').unwrap_or(value);
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CliError::Message(
+            "--jpeg-background must be an RGB color such as #ffffff".to_owned(),
+        ));
+    }
+    Ok([
+        u8::from_str_radix(&hex[0..2], 16).expect("validated hexadecimal red channel"),
+        u8::from_str_radix(&hex[2..4], 16).expect("validated hexadecimal green channel"),
+        u8::from_str_radix(&hex[4..6], 16).expect("validated hexadecimal blue channel"),
+    ])
 }
 
 fn required_value(value: Option<String>, flag: &str) -> Result<String, CliError> {
@@ -146,7 +239,7 @@ fn usage() -> CliError {
 }
 
 const fn usage_text() -> &'static str {
-    "usage: streamthumb <input.png> <output.png> [--max-width N] [--max-height N] [--allow-upscale] [--png-color MODE] [--png-compression LEVEL] [--png-filter FILTER]"
+    "usage: streamthumb <input.png> <output.png|output.jpg> [--format png|jpeg] [--max-width N] [--max-height N] [--allow-upscale] [--png-color MODE] [--png-compression LEVEL] [--png-filter FILTER] [--jpeg-quality 1..100] [--jpeg-background #rrggbb] [--jpeg-subsampling 420|422|444]"
 }
 
 #[derive(Debug)]
@@ -237,6 +330,56 @@ mod tests {
         assert_eq!(config.png_options.color, PngColorMode::Auto);
         assert_eq!(config.png_options.compression, PngCompression::High);
         assert_eq!(config.png_options.filter, PngFilter::MinEntropy);
+    }
+
+    #[test]
+    fn infers_jpeg_and_parses_encoder_options() {
+        let config = Config::parse(
+            [
+                "input.png",
+                "output.jpg",
+                "--jpeg-quality",
+                "92",
+                "--jpeg-background",
+                "#0a64dc",
+                "--jpeg-subsampling",
+                "444",
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+
+        assert_eq!(config.options.output, OutputFormat::Jpeg);
+        assert_eq!(
+            config.jpeg_options,
+            JpegOptions {
+                quality: 92,
+                background: [10, 100, 220],
+                subsampling: JpegSubsampling::S444,
+            }
+        );
+    }
+
+    #[test]
+    fn validates_format_specific_options() {
+        assert!(
+            Config::parse(["input.png", "output.jpg", "--png-color", "rgb8"].map(str::to_owned))
+                .is_err()
+        );
+        assert!(
+            Config::parse(["input.png", "output.png", "--jpeg-quality", "85"].map(str::to_owned))
+                .is_err()
+        );
+        assert!(
+            Config::parse(["input.png", "output.jpg", "--jpeg-quality", "0"].map(str::to_owned))
+                .is_err()
+        );
+        assert!(
+            Config::parse(
+                ["input.png", "output.jpg", "--jpeg-background", "xyz"].map(str::to_owned)
+            )
+            .is_err()
+        );
     }
 
     #[test]

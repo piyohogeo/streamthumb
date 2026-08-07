@@ -1,15 +1,16 @@
 # streamthumb
 
-`streamthumb` is a memory-bounded streaming PNG thumbnail generator for Rust and WebAssembly.
+`streamthumb` is a memory-bounded streaming PNG thumbnail generator for Rust and WebAssembly, with PNG, JPEG, and raw RGBA output.
 
-The project currently implements checked thumbnail geometry, resource-limit validation, conservative working-memory planning, and bounded PNG thumbnail paths for non-interlaced and Adam7 1/2/4/8/16-bit grayscale, 8/16-bit grayscale-alpha, RGB, and RGBA files, plus 1/2/4/8-bit palette files. Palette, grayscale, and RGB `tRNS` transparency are supported. Encoded PNG rows flow directly from the resampler into the encoder without a complete resized RGBA frame; raw RGBA, native CLI, and WebAssembly APIs remain available.
+The project currently implements checked thumbnail geometry, resource-limit validation, conservative working-memory planning, and bounded PNG thumbnail paths for non-interlaced and Adam7 1/2/4/8/16-bit grayscale, 8/16-bit grayscale-alpha, RGB, and RGBA files, plus 1/2/4/8-bit palette files. Palette, grayscale, and RGB `tRNS` transparency are supported. Encoded PNG and JPEG rows flow directly from the resampler into bounded encoders without a complete resized RGBA frame; raw RGBA, native CLI, and WebAssembly APIs remain available.
 
 ## Workspace
 
 - `streamthumb-core`: platform-independent options, limits, geometry, errors, and processing plans
+- `streamthumb-encode`: shared bounded output storage and the MCU-row JPEG sink
 - `streamthumb-png`: bounded PNG header validation, row decoding, and RGBA8 normalization
 - `streamthumb-wasm`: runtime-neutral `Uint8Array` WebAssembly bindings
-- `streamthumb-cli`: native command-line frontend producing encoded PNG thumbnails
+- `streamthumb-cli`: native command-line frontend producing encoded PNG or JPEG thumbnails
 
 ## CLI
 
@@ -32,6 +33,18 @@ CLI values match the WebAssembly literals: color accepts `auto`, `rgba8`,
 `rgb8`, `grayscale-alpha8`, or `grayscale8`; compression accepts `none`,
 `fastest`, `fast`, `balanced`, or `high`; and filter accepts `default`, `none`,
 `sub`, `up`, `average`, `paeth`, `adaptive`, or `min-entropy`.
+
+JPEG output is selected by a `.jpg` or `.jpeg` extension, or explicitly with
+`--format jpeg`. Quality, alpha-compositing background, and chroma subsampling
+are configurable:
+
+```text
+cargo run -p streamthumb-cli -- input.png output.jpg --jpeg-quality 85 --jpeg-background ffffff --jpeg-subsampling 420
+```
+
+The Rust API exposes `JpegOptions` through
+`thumbnail_png_with_jpeg_options`. JPEG output is baseline sequential and
+supports 4:2:0, 4:2:2, and 4:4:4 subsampling.
 
 ## WebAssembly
 
@@ -61,7 +74,7 @@ publishing, tagging, or creating a GitHub release.
 
 | | streamthumb | jSquash | wasm-vips |
 | --- | --- | --- | --- |
-| Primary scope | Bounded PNG thumbnail generation | Composable browser image codecs and resize operations | Broad libvips image processing |
+| Primary scope | Bounded PNG-input thumbnail generation | Composable browser image codecs and resize operations | Broad libvips image processing |
 | Source-memory model | Streaming rows or bounded Adam7 accumulation | Full decoded image passed between operations | Depends on the libvips operation and pipeline |
 | Deployment shape | One narrow Rust/WASM package | Separate codec and resize WASM modules | General-purpose image runtime |
 | Best fit | Predictable-memory PNG thumbnails | Flexible browser codec composition | Many formats and transformations |

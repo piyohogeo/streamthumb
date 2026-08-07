@@ -32,6 +32,7 @@ pub enum Error {
     DecodeFailure(String),
     EncodeFailure(String),
     InvalidPngOptions(&'static str),
+    InvalidJpegOptions(&'static str),
     EncodedOutputLimitExceeded {
         limit: usize,
     },
@@ -54,12 +55,15 @@ impl fmt::Display for Error {
                 write!(formatter, "failed to allocate a {bytes}-byte buffer")
             }
             Self::DecodeFailure(message) => write!(formatter, "PNG decode failure: {message}"),
-            Self::EncodeFailure(message) => write!(formatter, "PNG encode failure: {message}"),
+            Self::EncodeFailure(message) => write!(formatter, "image encode failure: {message}"),
             Self::InvalidPngOptions(message) => {
                 write!(formatter, "invalid PNG encoder options: {message}")
             }
+            Self::InvalidJpegOptions(message) => {
+                write!(formatter, "invalid JPEG encoder options: {message}")
+            }
             Self::EncodedOutputLimitExceeded { limit } => {
-                write!(formatter, "encoded PNG exceeded its {limit}-byte limit")
+                write!(formatter, "encoded output exceeded its {limit}-byte limit")
             }
             Self::RowConsumer(message) => write!(formatter, "row consumer failed: {message}"),
         }
@@ -78,5 +82,26 @@ impl std::error::Error for Error {
 impl From<streamthumb_core::Error> for Error {
     fn from(error: streamthumb_core::Error) -> Self {
         Self::Core(error)
+    }
+}
+
+impl From<streamthumb_encode::Error> for Error {
+    fn from(error: streamthumb_encode::Error) -> Self {
+        match error {
+            streamthumb_encode::Error::Core(error) => Self::Core(error),
+            streamthumb_encode::Error::InvalidJpegOptions(message) => {
+                Self::InvalidJpegOptions(message)
+            }
+            streamthumb_encode::Error::AllocationFailed { bytes } => {
+                Self::AllocationFailed { bytes }
+            }
+            streamthumb_encode::Error::EncodedOutputLimitExceeded { limit, .. } => {
+                Self::EncodedOutputLimitExceeded { limit }
+            }
+            streamthumb_encode::Error::EncodeFailure { message, .. } => {
+                Self::EncodeFailure(message)
+            }
+            other => Self::EncodeFailure(other.to_string()),
+        }
     }
 }

@@ -131,7 +131,7 @@ fn main() -> Result<()> {
                 "usage:\n  streamthumb-benchmarks generate-smoke <directory>\n  \
                  streamthumb-benchmarks generate-memory <directory>\n  \
                  streamthumb-benchmarks generate-adam7 <directory>\n  \
-                 streamthumb-benchmarks run <streamthumb|image-rs> <input> <output> <max-dimension>"
+                 streamthumb-benchmarks run <streamthumb-png|streamthumb-jpeg|image-rs> <input> <output> <max-dimension>"
             );
             Err("invalid benchmark arguments".into())
         }
@@ -306,7 +306,12 @@ fn run_method(method: &str, input: &Path, output: &Path, max_dimension: u32) -> 
     let input_bytes = fs::read(input)?;
     let started = Instant::now();
     let (source_width, source_height, output_width, output_height, output_bytes) = match method {
-        "streamthumb" => run_streamthumb(&input_bytes, output, max_dimension)?,
+        "streamthumb" | "streamthumb-png" => {
+            run_streamthumb(&input_bytes, output, max_dimension, OutputFormat::Png)?
+        }
+        "streamthumb-jpeg" => {
+            run_streamthumb(&input_bytes, output, max_dimension, OutputFormat::Jpeg)?
+        }
         "image-rs" => run_image_rs(&input_bytes, output, max_dimension)?,
         _ => return Err(format!("unsupported benchmark method: {method}").into()),
     };
@@ -330,14 +335,16 @@ fn run_streamthumb(
     input: &[u8],
     output: &Path,
     max_dimension: u32,
+    format: OutputFormat,
 ) -> Result<(u32, u32, u32, u32, u64)> {
     let mut options = ThumbnailOptions {
         max_width: max_dimension,
         max_height: max_dimension,
-        output: OutputFormat::Png,
+        output: format,
         ..ThumbnailOptions::default()
     };
     options.limits.max_input_bytes = u64::try_from(input.len())?.saturating_add(1);
+    options.limits.max_working_memory_bytes = 512 * 1024 * 1024;
     let result = thumbnail_png(input, &options)?;
     match result {
         ThumbnailOutput::Encoded {
