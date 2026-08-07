@@ -43,7 +43,11 @@ jobs:
         id: chrome
         with:
           install-chromedriver: true
-      - run: wasm-pack test --headless --chrome --chromedriver=${{ steps.chrome.outputs.chromedriver-path }} crates/streamthumb-wasm
+      - name: Test in Chrome
+        run: |
+          printf '{"goog:chromeOptions":{"binary":"%s","args":[]}}\n' '${{ steps.chrome.outputs.chrome-path }}' > crates/streamthumb-wasm/webdriver.json
+          wasm-pack test --headless --chrome --chromedriver=${{ steps.chrome.outputs.chromedriver-path }} crates/streamthumb-wasm
+          rm -f crates/streamthumb-wasm/webdriver.json
       - run: wasm-pack test --headless --firefox crates/streamthumb-wasm
 
   benchmark-tool:
