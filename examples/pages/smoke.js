@@ -39,8 +39,7 @@ function run(input, options) {
     };
     worker.addEventListener("message", onMessage);
     worker.addEventListener("error", (event) => reject(new Error(event.message)), { once: true });
-    const transferred = input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength);
-    worker.postMessage({ type: "run", requestId, input: transferred, fileName: "sample.png", options }, [transferred]);
+    worker.postMessage({ type: "run", requestId, input, fileName: "sample.png", options });
   });
 }
 
@@ -119,13 +118,15 @@ async function report(result, message) {
 try {
   const ready = await waitForReady();
   assert(/^\d+\.\d+\.\d+/.test(ready.version), "Worker did not report a semantic version.");
-  const input = new Uint8Array(await fetch("./samples/pngsuite_basn6a08.png").then((response) => response.arrayBuffer()));
+  const input = await fetch("./samples/pngsuite_basn6a08.png").then((response) => response.blob());
 
   const png = await run(input, { maxWidth: 16, maxHeight: 16, output: "png", maxMemoryBytes: 32 * 1024 * 1024 });
   assert(png.type === "success", `PNG run failed: ${png.error}`);
   assert(png.plan.withinMemoryLimit, "PNG plan unexpectedly exceeded the memory limit.");
   assert(Number.isFinite(png.plan.memory.totalBytes) && png.plan.memory.totalBytes > 0, "PNG plan did not contain finite memory.");
   assert(Number.isFinite(png.timings.processingMs) && png.timings.processingMs >= 0, "PNG timing was invalid.");
+  assert(png.inputReads.calls > 0 && png.inputReads.bytes > 0, "Seekable input did not issue range reads.");
+  assert(png.inputReads.largestReadBytes <= 8 * 1024, "Seekable input exceeded the bounded reader capacity.");
   assert(Number.isFinite(png.wasm.before) && Number.isFinite(png.wasm.after) && Number.isFinite(png.wasm.growth), "WASM memory observations were invalid.");
   await assertImage(new Uint8Array(png.bytes), png.metadata.mimeType, 16, 16);
 
@@ -144,7 +145,7 @@ try {
   const recovered = await run(input, { maxWidth: 8, maxHeight: 8, output: "png", maxMemoryBytes: 32 * 1024 * 1024 });
   assert(recovered.type === "success", "A valid run did not recover after the limit rejection.");
   await verifyPageUi();
-  await report("pass", "PASS: Pages UI and worker verified PNG, JPEG, RGBA, planning, limit rejection, previews, and recovery");
+  await report("pass", "PASS: Pages UI and seekable Blob worker verified bounded reads, PNG, JPEG, RGBA, planning, limit rejection, previews, and recovery");
 } catch (error) {
   await report("fail", String(error));
 } finally {

@@ -94,7 +94,9 @@ buffer-returning APIs remain available.
 Try the [live WebAssembly demo](https://piyohogeo.github.io/streamthumb/).
 Selected PNG files stay in the browser; a module worker displays the same
 conservative Rust memory plan used by execution before generating PNG, JPEG,
-or raw RGBA output.
+or raw RGBA output. The demo keeps input as a `File` or `Blob` and uses bounded
+synchronous range reads instead of complete JavaScript and WebAssembly input
+copies.
 
 Build a browser-targeted package with:
 

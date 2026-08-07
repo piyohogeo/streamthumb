@@ -27,6 +27,9 @@ project follows Semantic Versioning.
 
 ### Changed
 
+- The GitHub Pages demo now passes `File` and `Blob` inputs to its dedicated
+  worker and uses the seekable planning and execution APIs, avoiding complete
+  JavaScript and WebAssembly encoded-input copies.
 - Release WebAssembly packages now use `wasm-opt -Oz` explicitly so the pinned
   Rust 1.85 build remains within the existing package-size budget.
 - Release builds use fat LTO, one code-generation unit, and aborting panics to

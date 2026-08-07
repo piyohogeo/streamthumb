@@ -1,8 +1,8 @@
 import init, {
-  planThumbnailPng,
+  planThumbnailPngFromSeekable,
   streamthumbVersion,
-  thumbnailPng,
-  thumbnailPngToChunks,
+  thumbnailPngFromSeekable,
+  thumbnailPngFromSeekableToChunks,
   wasmMemoryBytes,
 } from "./vendor/streamthumb_wasm.js";
 
@@ -24,19 +24,54 @@ function joinChunks(chunks, length) {
   return bytes;
 }
 
+function seekableSource(input) {
+  if (!(input instanceof Blob)) {
+    throw new TypeError("Pages worker input must be a File or Blob.");
+  }
+  const reader = new FileReaderSync();
+  let calls = 0;
+  let bytes = 0;
+  let largestReadBytes = 0;
+  return {
+    inputLength: input.size,
+    readAt(offset, length) {
+      const chunk = new Uint8Array(
+        reader.readAsArrayBuffer(input.slice(offset, offset + length)),
+      );
+      calls += 1;
+      bytes += chunk.length;
+      largestReadBytes = Math.max(largestReadBytes, chunk.length);
+      return chunk;
+    },
+    stats() {
+      return { calls, bytes, largestReadBytes };
+    },
+  };
+}
+
 self.addEventListener("message", ({ data }) => {
   const requestId = Number.isSafeInteger(data.requestId) ? data.requestId : 0;
   try {
-    const input = new Uint8Array(data.input);
+    const source = seekableSource(data.input);
     if (data.type === "inspect") {
-      const plan = planThumbnailPng(input, null, "chunks");
+      const plan = planThumbnailPngFromSeekable(
+        source.inputLength,
+        source.readAt,
+        null,
+        "chunks",
+      );
       self.postMessage({ type: "inspected", requestId, input: plan.input });
       return;
     }
     if (data.type !== "run") return;
 
     const delivery = data.options.output === "rgba" ? "buffered" : "chunks";
-    const plan = planThumbnailPng(input, data.options, delivery);
+    const plan = planThumbnailPngFromSeekable(
+      source.inputLength,
+      source.readAt,
+      data.options,
+      delivery,
+    );
     const wasmAfterPlanBytes = wasmMemoryBytes();
     self.postMessage({ type: "planned", requestId, plan, wasmAfterPlanBytes });
     if (!plan.withinMemoryLimit) {
@@ -56,7 +91,11 @@ self.addEventListener("message", ({ data }) => {
     let outputBytes;
     let metadata;
     if (data.options.output === "rgba") {
-      const result = thumbnailPng(input, data.options);
+      const result = thumbnailPngFromSeekable(
+        source.inputLength,
+        source.readAt,
+        data.options,
+      );
       try {
         outputBytes = result.bytes;
         metadata = {
@@ -71,7 +110,12 @@ self.addEventListener("message", ({ data }) => {
       }
     } else {
       const chunks = [];
-      const result = thumbnailPngToChunks(input, (chunk) => chunks.push(chunk), data.options);
+      const result = thumbnailPngFromSeekableToChunks(
+        source.inputLength,
+        source.readAt,
+        (chunk) => chunks.push(chunk),
+        data.options,
+      );
       try {
         metadata = {
           width: result.width,
@@ -95,6 +139,7 @@ self.addEventListener("message", ({ data }) => {
         metadata,
         bytes: outputBytes.buffer,
         timings: { processingMs },
+        inputReads: source.stats(),
         wasm: { before, after, growth: Math.max(0, after - before) },
       },
       [outputBytes.buffer],

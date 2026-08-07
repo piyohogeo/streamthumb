@@ -2,7 +2,10 @@
 
 This directory contains the static source for the streamthumb GitHub Pages
 demo. It processes selected PNG files in a module Web Worker and never sends
-their contents to a server.
+their contents to a server. The main thread passes each `File` or sample `Blob`
+to the worker without materializing a complete `ArrayBuffer`. The worker uses
+`FileReaderSync`, `Blob.slice()`, and the seekable WebAssembly APIs so planning
+and execution copy only the encoded ranges requested by the PNG decoder.
 
 Build the unpublished WebAssembly package and the site from the repository
 root:

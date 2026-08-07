@@ -159,12 +159,24 @@ for (const uiDefault of [
 const pagesWorker = await source("examples/pages/worker.js");
 for (const publicCall of [
   'from "./vendor/streamthumb_wasm.js"',
-  "planThumbnailPng",
-  "thumbnailPngToChunks",
-  "thumbnailPng",
+  "planThumbnailPngFromSeekable",
+  "thumbnailPngFromSeekableToChunks",
+  "thumbnailPngFromSeekable",
+  "FileReaderSync",
+  "input.slice(offset, offset + length)",
   "wasmMemoryBytes",
 ]) {
   requireText(pagesWorker, publicCall, "examples/pages/worker.js");
+}
+for (const copiedInputCall of ["planThumbnailPng(", "thumbnailPng(", "thumbnailPngToChunks("]) {
+  if (pagesWorker.includes(copiedInputCall)) {
+    throw new Error(`examples/pages/worker.js must not use the copying API: ${copiedInputCall}`);
+  }
+}
+const pagesMain = await source("examples/pages/main.js");
+requireText(pagesMain, "response.blob()", "examples/pages/main.js");
+if (pagesMain.includes(".arrayBuffer()")) {
+  throw new Error("examples/pages/main.js must retain File and Blob input instead of materializing an ArrayBuffer");
 }
 
 console.log("PASS: public WebAssembly API documentation and examples are aligned");

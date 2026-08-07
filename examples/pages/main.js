@@ -184,22 +184,22 @@ function updateBusy(nextBusy) {
   workspace.setAttribute("aria-busy", String(!ready || busy));
 }
 
-function inspectInput(bytes, name) {
-  currentInput = bytes;
+function inspectInput(input, name) {
+  if (!(input instanceof Blob)) throw new TypeError("Input must be a File or Blob.");
+  currentInput = input;
   currentName = name;
   clearResult();
   setResultState("running", "INSPECTING", "Reading validated PNG metadata in WebAssembly…");
   const requestId = ++nextRequestId;
   currentInspectId = requestId;
-  const transferred = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  worker.postMessage({ type: "inspect", requestId, input: transferred }, [transferred]);
+  worker.postMessage({ type: "inspect", requestId, input });
   updateBusy(true);
 }
 
 async function selectFile(file) {
   if (!file) return;
   try {
-    inspectInput(new Uint8Array(await file.arrayBuffer()), file.name);
+    inspectInput(file, file.name);
   } catch (error) {
     showFailure("input inspection", error);
   }
@@ -347,8 +347,7 @@ form.addEventListener("submit", (event) => {
     updateBusy(true);
     const requestId = ++nextRequestId;
     currentRunId = requestId;
-    const transferred = currentInput.buffer.slice(currentInput.byteOffset, currentInput.byteOffset + currentInput.byteLength);
-    worker.postMessage({ type: "run", requestId, input: transferred, fileName: currentName, options }, [transferred]);
+    worker.postMessage({ type: "run", requestId, input: currentInput, fileName: currentName, options });
   } catch (error) {
     showFailure("settings validation", error);
   }
@@ -374,7 +373,7 @@ sampleButton.addEventListener("click", async () => {
     const sample = manifest.samples[0];
     const response = await fetch(sample.path);
     if (!response.ok) throw new Error(`Sample request failed with HTTP ${response.status}.`);
-    inspectInput(new Uint8Array(await response.arrayBuffer()), sample.path.split("/").at(-1));
+    inspectInput(await response.blob(), sample.path.split("/").at(-1));
   } catch (error) {
     showFailure("sample loading", error);
   }

@@ -1378,3 +1378,10 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 6. The package remains runtime-neutral: it accepts a numeric length and callback rather than a DOM `File`. Browser documentation places `FileReaderSync` and `Blob.slice()` in a dedicated worker; Node.js and Deno may provide equivalent synchronous range readers.
 7. Dedicated-worker Chrome and Firefox tests cover output parity, chunk parity, bounded reads, pre-read input-limit rejection, callback contract failures, and exception identity. The installed-tarball Chrome consumer uses a real structured-cloned `Blob` and `FileReaderSync` worker.
 8. Slice and seekable WebAssembly execution share one internal reader enum and common non-inlined buffered and chunked drivers so decoder, encoder, and callback paths are generated once. Fat LTO, one code-generation unit, aborting panics, and the existing `wasm-opt -Oz` keep the pinned Rust 1.85 release package at 536,273 unpacked bytes, below the unchanged 550,000-byte limit.
+
+### Phase 38 decisions
+
+1. The Pages main thread retains selected files and bundled samples as `File` or `Blob` objects and sends those objects to its dedicated worker by structured clone. It does not materialize or transfer a complete input `ArrayBuffer`.
+2. The worker uses `FileReaderSync` and `Blob.slice()` to implement the synchronous exact-length range-reader contract. Inspection and configured-option planning call `planThumbnailPngFromSeekable`.
+3. Buffered RGBA execution calls `thumbnailPngFromSeekable`; encoded PNG and JPEG execution call `thumbnailPngFromSeekableToChunks`. Output assembly remains in JavaScript because previews and downloads require a complete output object.
+4. Pages smoke coverage supplies a real `Blob`, requires at least one range read, and verifies that no request exceeds the existing 8 KiB buffered-reader capacity. Static checks reject regression to the complete-input copying APIs in the Pages worker.

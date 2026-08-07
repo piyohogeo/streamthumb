@@ -45,6 +45,10 @@ for (const [name, contents] of [["index.html", index], ["main.js", main], ["work
   }
 }
 if (!worker.includes('from "./vendor/streamthumb_wasm.js"')) throw new Error("The Pages worker must import the vendored WebAssembly module.");
+for (const required of ["planThumbnailPngFromSeekable", "thumbnailPngFromSeekable", "thumbnailPngFromSeekableToChunks", "FileReaderSync"]) {
+  if (!worker.includes(required)) throw new Error(`The Pages worker must use ${required}.`);
+}
+if (main.includes(".arrayBuffer()")) throw new Error("The Pages main thread must retain File and Blob input without materializing an ArrayBuffer.");
 if (!Array.isArray(manifest.samples) || manifest.samples.length === 0) throw new Error("The sample manifest must contain at least one sample.");
 for (const sample of manifest.samples) {
   if (typeof sample.path !== "string" || !sample.path.startsWith("./samples/")) throw new Error("Every sample must use a Pages-relative samples path.");
