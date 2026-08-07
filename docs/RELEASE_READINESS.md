@@ -1,12 +1,13 @@
 # Release readiness audit
 
 This document records the pre-publication audit for version 0.1.0 after the
-centered-cover extension. It is evidence that release inputs can be assembled
-and verified; it is not authorization to publish, tag, or create a release.
+centered-cover and direct-writer extensions. It is evidence that release inputs
+can be assembled and verified; it is not authorization to publish, tag, or
+create a release.
 
 ## Automated gates
 
-- Normal CI checks formatting, clippy with warnings denied, 109 native tests,
+- Normal CI checks formatting, clippy with warnings denied, 115 native tests,
   the wasm32 build, Chrome and Firefox tests, installed npm tarball consumers
   in browsers, Node.js, and Deno, benchmark tooling, and all Rust packages.
 - Scheduled and manually dispatched fuzzing covers row decoding, all thumbnail
@@ -45,7 +46,7 @@ The local audit tarball contains exactly eight files:
 - `streamthumb_wasm_bg.wasm.d.ts`
 
 The package has no npm runtime dependencies. The local stable-toolchain audit
-measured 159,211 packed bytes and 368,142 unpacked bytes. These values are
+measured 160,698 packed bytes and 372,019 unpacked bytes. These values are
 descriptive; the pinned release-candidate manifest is authoritative for any
 future release.
 

@@ -1292,3 +1292,12 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. JPEG output is baseline sequential with fixed Huffman tables. Public options cover quality 1 through 100, a three-channel compositing background, and 4:2:0, 4:2:2, or 4:4:4 subsampling. Width and height are limited to the baseline header's 65,535-pixel range.
 5. Ordered and Adam7 inputs share the same JPEG sink. Independent decoder tests cover multiple MCU rows, all subsampling modes, quality 100, alpha compositing, limits, and lossy pixel tolerances. A dedicated-worker WebAssembly test covers the browser build.
 6. `jpeg-encoder` declares Rust 1.61, so the workspace retains Rust 1.85. Memory planning includes the RGB MCU input, encoder plane and coefficient allowances, one bounded temporary entropy segment, and the complete bounded encoded result.
+
+### Phase 29 decisions
+
+1. Native Rust callers can stream encoded output through `thumbnail_png_to_writer` or `thumbnail_jpeg_to_writer`, with option-bearing variants for both codecs. The writer is owned for the duration of the operation and completion returns `ThumbnailInfo`.
+2. Direct writer output enforces the same conservative encoded byte cap as the owned-buffer APIs. `ProcessingPlan::encoded_output_limit_bytes` records that cap independently from `MemoryEstimate::encoded_output_bytes`.
+3. Writer processing plans set `encoded_output_bytes` to zero because streamthumb does not retain the completed encoded image. Caller-owned writer storage and buffering remain outside streamthumb's working-memory boundary.
+4. PNG and JPEG writer output is byte-for-byte equivalent to the existing buffered path for ordered and Adam7 input. External write and flush failures are returned as typed streamthumb encode errors.
+5. The CLI writes through a `BufWriter<File>` instead of first constructing a complete encoded `Vec<u8>`. Existing buffer-returning Rust and WebAssembly APIs remain compatible.
+6. JavaScript chunk callbacks and streams remain a separate later stage. A future WebAssembly API should batch encoded chunks instead of crossing the JavaScript boundary once per image row.

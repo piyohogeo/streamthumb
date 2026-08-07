@@ -3,7 +3,7 @@ use std::io::Write;
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use streamthumb_core::{Dimensions, Error as CoreError, OutputFormat, RgbaRowSink};
 
-use crate::{BoundedWriter, Error, Result};
+use crate::{BoundedWriter, BufferedOutput, Error, ExternalOutput, OutputTarget, Result};
 
 /// Chroma resolution used by the JPEG encoder.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -55,9 +55,18 @@ impl JpegOptions {
 /// markers. This bounds raw encoder input to 8 or 16 rows while retaining a
 /// standards-compliant single-image bitstream.
 pub struct JpegRowSink {
+    encoder: JpegEncoder<BufferedOutput>,
+}
+
+/// A JPEG row sink that forwards encoded bytes to a caller-owned writer.
+pub struct JpegWriterRowSink<W: Write> {
+    encoder: JpegEncoder<ExternalOutput<W>>,
+}
+
+struct JpegEncoder<T: OutputTarget> {
     dimensions: Dimensions,
     next_y: u32,
-    output: BoundedWriter,
+    output: BoundedWriter<T>,
     byte_limit: usize,
     rgb_rows: Vec<u8>,
     lines_in_buffer: usize,
@@ -67,13 +76,40 @@ pub struct JpegRowSink {
 
 impl JpegRowSink {
     pub fn new(dimensions: Dimensions, byte_limit: usize, options: JpegOptions) -> Result<Self> {
+        let output = BoundedWriter::buffered(byte_limit, OutputFormat::Jpeg)?;
+        Ok(Self {
+            encoder: JpegEncoder::new(dimensions, byte_limit, options, output)?,
+        })
+    }
+}
+
+impl<W: Write> JpegWriterRowSink<W> {
+    pub fn new(
+        dimensions: Dimensions,
+        byte_limit: usize,
+        options: JpegOptions,
+        writer: W,
+    ) -> Result<Self> {
+        let output = BoundedWriter::external(writer, byte_limit, OutputFormat::Jpeg)?;
+        Ok(Self {
+            encoder: JpegEncoder::new(dimensions, byte_limit, options, output)?,
+        })
+    }
+}
+
+impl<T: OutputTarget> JpegEncoder<T> {
+    fn new(
+        dimensions: Dimensions,
+        byte_limit: usize,
+        options: JpegOptions,
+        output: BoundedWriter<T>,
+    ) -> Result<Self> {
         let options = options.validate()?;
         if dimensions.width > u32::from(u16::MAX) || dimensions.height > u32::from(u16::MAX) {
             return Err(Error::InvalidJpegOptions(
                 "output dimensions must not exceed 65535 pixels",
             ));
         }
-        let output = BoundedWriter::new(byte_limit, OutputFormat::Jpeg)?;
         let buffer_bytes = usize::try_from(dimensions.width)
             .ok()
             .and_then(|width| width.checked_mul(3))
@@ -109,7 +145,7 @@ impl JpegRowSink {
         })?;
         let row_bytes = usize::from(width) * 3;
         let pixels = &self.rgb_rows[..row_bytes * self.lines_in_buffer];
-        let temporary = BoundedWriter::new(self.byte_limit, OutputFormat::Jpeg)?;
+        let temporary = BoundedWriter::buffered(self.byte_limit, OutputFormat::Jpeg)?;
         {
             let mut encoder = Encoder::new(temporary.clone(), self.options.quality);
             encoder.set_sampling_factor(map_subsampling(self.options.subsampling));
@@ -117,7 +153,7 @@ impl JpegRowSink {
                 .encode(pixels, width, height, ColorType::Rgb)
                 .map_err(|error| temporary.map_external_error(error.to_string()))?;
         }
-        let segment = temporary.into_bytes()?;
+        let segment = temporary.into_output()?;
         let parts = parse_segment(&segment)?;
 
         if self.segment_count == 0 {
@@ -155,10 +191,7 @@ impl JpegRowSink {
     }
 }
 
-impl RgbaRowSink for JpegRowSink {
-    type Output = Vec<u8>;
-    type Error = Error;
-
+impl<T: OutputTarget> JpegEncoder<T> {
     fn push_row(&mut self, y: u32, rgba: &[u8]) -> Result<()> {
         if y != self.next_y {
             return Err(CoreError::UnexpectedRow {
@@ -203,7 +236,7 @@ impl RgbaRowSink for JpegRowSink {
         Ok(())
     }
 
-    fn finish(mut self) -> Result<Vec<u8>> {
+    fn finish(mut self) -> Result<T::Finished> {
         if self.next_y != self.dimensions.height {
             return Err(CoreError::IncompleteImage {
                 expected_rows: self.dimensions.height,
@@ -217,7 +250,36 @@ impl RgbaRowSink for JpegRowSink {
         self.output
             .write_all(&[0xff, 0xd9])
             .map_err(|error| self.output.map_external_error(error.to_string()))?;
-        self.output.into_bytes()
+        self.output
+            .flush()
+            .map_err(|error| self.output.map_external_error(error.to_string()))?;
+        self.output.into_output()
+    }
+}
+
+impl RgbaRowSink for JpegRowSink {
+    type Output = Vec<u8>;
+    type Error = Error;
+
+    fn push_row(&mut self, y: u32, rgba: &[u8]) -> Result<()> {
+        self.encoder.push_row(y, rgba)
+    }
+
+    fn finish(self) -> Result<Self::Output> {
+        self.encoder.finish()
+    }
+}
+
+impl<W: Write> RgbaRowSink for JpegWriterRowSink<W> {
+    type Output = ();
+    type Error = Error;
+
+    fn push_row(&mut self, y: u32, rgba: &[u8]) -> Result<()> {
+        self.encoder.push_row(y, rgba)
+    }
+
+    fn finish(self) -> Result<Self::Output> {
+        self.encoder.finish()
     }
 }
 

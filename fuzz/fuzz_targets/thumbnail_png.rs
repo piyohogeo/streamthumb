@@ -6,7 +6,9 @@ use libfuzzer_sys::fuzz_target;
 use streamthumb_core::{Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
     JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngOptions,
-    thumbnail_png, thumbnail_png_with_encoder_options, thumbnail_png_with_jpeg_options,
+    thumbnail_jpeg_to_writer_with_options, thumbnail_png,
+    thumbnail_png_to_writer_with_encoder_options, thumbnail_png_with_encoder_options,
+    thumbnail_png_with_jpeg_options,
 };
 
 fuzz_target!(|data: &[u8]| {
@@ -74,10 +76,21 @@ fuzz_target!(|data: &[u8]| {
             _ => JpegSubsampling::S444,
         },
     };
-    let result = match output {
-        OutputFormat::Png => thumbnail_png_with_encoder_options(data, &options, &png_options),
-        OutputFormat::Jpeg => thumbnail_png_with_jpeg_options(data, &options, &jpeg_options),
-        OutputFormat::Rgba => thumbnail_png(data, &options),
-    };
-    let _ = black_box(result);
+    let direct_writer = data.get(9).copied().unwrap_or_default() & 1 != 0;
+    if direct_writer && output == OutputFormat::Png {
+        let result =
+            thumbnail_png_to_writer_with_encoder_options(data, &options, &png_options, Vec::new());
+        let _ = black_box(result);
+    } else if direct_writer && output == OutputFormat::Jpeg {
+        let result =
+            thumbnail_jpeg_to_writer_with_options(data, &options, &jpeg_options, Vec::new());
+        let _ = black_box(result);
+    } else {
+        let result = match output {
+            OutputFormat::Png => thumbnail_png_with_encoder_options(data, &options, &png_options),
+            OutputFormat::Jpeg => thumbnail_png_with_jpeg_options(data, &options, &jpeg_options),
+            OutputFormat::Rgba => thumbnail_png(data, &options),
+        };
+        let _ = black_box(result);
+    }
 });

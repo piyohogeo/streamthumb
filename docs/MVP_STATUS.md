@@ -61,6 +61,13 @@ bounded. The encoder selection was revised after independent decoding exposed
 a correctness defect in the initially selected dependency; see
 `docs/JPEG_ENCODER_SELECTION.md`.
 
+The optional native output stage adds PNG and JPEG APIs that take ownership of
+an `std::io::Write` implementation and return `ThumbnailInfo`. The byte cap is
+still enforced as encoded chunks are forwarded, while memory planning records
+zero retained encoded-result bytes. The CLI uses this path for direct file
+output. Existing owned-byte Rust APIs and the WebAssembly contract remain
+unchanged.
+
 ## Explicit limitations and deferred work
 
 - APNG, JPEG input, WebP, AVIF, general transformations, additional filters,

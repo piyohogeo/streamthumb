@@ -109,6 +109,26 @@ The optimized WebAssembly binary is 323.6 KiB with centered cover support,
 17.0 KiB (about 5.5%) above the 306.6 KiB JPEG baseline. The package and binary
 sizes remain descriptive measurements rather than release thresholds.
 
+## Direct native writer comparison
+
+A 2,048 x 2,048 deterministic high-entropy source was processed at its full
+dimensions to make completed encoded-result storage visible in native Peak RSS.
+The buffered and direct-writer methods produced byte-for-byte identical files.
+
+| Codec path | Runtime | Peak RSS | Encoded output |
+| --- | ---: | ---: | ---: |
+| Buffered PNG | 832.9 ms | 35.18 MiB | 13.78 MiB |
+| Direct-writer PNG | 800.7 ms | 18.36 MiB | 13.78 MiB |
+| Buffered JPEG | 275.0 ms | 21.94 MiB | 3.32 MiB |
+| Direct-writer JPEG | 280.2 ms | 18.09 MiB | 3.32 MiB |
+
+The direct PNG path reduced measured Peak RSS by 16.82 MiB and the direct JPEG
+path by 3.85 MiB on this single Windows run. Runtime stayed within about 4% for
+both comparisons. The buffered writer also grows geometrically without ever
+reserving past its encoded-output cap, avoiding repeated exact reallocations on
+large high-entropy output. These measurements are illustrative rather than
+stable performance thresholds.
+
 ## Native results
 
 | Input | Method | Encoded input | Runtime | Peak RSS | Output |

@@ -13,6 +13,7 @@ browser-oriented PNG decode, resize, and encode pipeline.
 | Case | Dimensions | Pattern |
 | --- | ---: | --- |
 | square-blank | 2,048 x 2,048 | Highly compressible RGBA |
+| square-noise | 2,048 x 2,048 | Deterministic high-entropy RGB with opaque alpha |
 | wide-gradient | 8,192 x 64 | Deterministic gradient |
 | tall-noise | 64 x 8,192 | Deterministic high-entropy RGB with opaque alpha |
 
@@ -47,6 +48,9 @@ set size. JSON Lines output is written to
 `benchmarks/results/native-<profile>.jsonl`.
 
 The `streamthumb-png` and `streamthumb-jpeg` methods use contain fit. The
+`streamthumb-writer-png` and `streamthumb-writer-jpeg` methods produce the same
+output through caller-owned files without retaining the completed encoded
+result. These pairs isolate the native memory effect of direct output. The
 `streamthumb-cover-png` and `streamthumb-cover-jpeg` methods use centered cover
 fit with the same production bounded output paths. JPEG is baseline sequential
 with the public defaults. The

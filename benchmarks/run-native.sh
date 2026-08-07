@@ -23,7 +23,7 @@ cargo build --release --manifest-path benchmarks/Cargo.toml
 
 for input_file in "$corpus_directory"/*.png; do
   base_name="$(basename "$input_file" .png)"
-  for method in streamthumb-png streamthumb-jpeg streamthumb-cover-png streamthumb-cover-jpeg image-rs; do
+  for method in streamthumb-png streamthumb-jpeg streamthumb-writer-png streamthumb-writer-jpeg streamthumb-cover-png streamthumb-cover-jpeg image-rs; do
     extension="png"
     if [[ "$method" = *jpeg ]]; then extension="jpg"; fi
     output_file="$results_directory/$base_name-$method.$extension"

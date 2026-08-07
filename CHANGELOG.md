@@ -7,6 +7,7 @@ project follows Semantic Versioning.
 
 ### Added
 
+- Bounded direct-to-writer PNG and JPEG APIs used by CLI file output.
 - Memory-bounded PNG thumbnail generation for Rust and WebAssembly.
 - Static PNG support for all standard color types and legal bit depths,
   including Adam7 interlacing and applicable `tRNS` transparency.

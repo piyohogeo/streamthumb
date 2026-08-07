@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use streamthumb_core::{Dimensions, Error as CoreError, OutputFormat, RgbaRowSink};
-use streamthumb_encode::BoundedWriter;
+use streamthumb_encode::{BoundedWriter, BufferedOutput, ExternalOutput, OutputTarget};
 
 #[cfg(test)]
 use streamthumb_core::RgbaImage;
@@ -56,23 +56,50 @@ pub(crate) fn encode_rgba_png(image: &RgbaImage, byte_limit: usize) -> Result<Ve
     sink.finish()
 }
 
-pub(crate) struct PngRowSink {
+pub(crate) type PngRowSink = PngEncoderRowSink<BufferedOutput>;
+pub(crate) type PngWriterRowSink<W> = PngEncoderRowSink<ExternalOutput<W>>;
+
+pub(crate) struct PngEncoderRowSink<T: OutputTarget + 'static> {
     dimensions: Dimensions,
     next_y: u32,
-    stream: png::StreamWriter<'static, BoundedWriter>,
-    output: BoundedWriter,
+    stream: png::StreamWriter<'static, BoundedWriter<T>>,
+    output: BoundedWriter<T>,
     color: EncoderColor,
     converted_row: Vec<u8>,
 }
 
-impl PngRowSink {
+impl PngEncoderRowSink<BufferedOutput> {
     pub(crate) fn new(
         dimensions: Dimensions,
         byte_limit: usize,
         color: EncoderColor,
         options: PngOptions,
     ) -> Result<Self> {
-        let output = BoundedWriter::new(byte_limit, OutputFormat::Png)?;
+        let output = BoundedWriter::buffered(byte_limit, OutputFormat::Png)?;
+        Self::with_output(dimensions, color, options, output)
+    }
+}
+
+impl<W: Write + 'static> PngEncoderRowSink<ExternalOutput<W>> {
+    pub(crate) fn with_writer(
+        dimensions: Dimensions,
+        byte_limit: usize,
+        color: EncoderColor,
+        options: PngOptions,
+        writer: W,
+    ) -> Result<Self> {
+        let output = BoundedWriter::external(writer, byte_limit, OutputFormat::Png)?;
+        Self::with_output(dimensions, color, options, output)
+    }
+}
+
+impl<T: OutputTarget + 'static> PngEncoderRowSink<T> {
+    fn with_output(
+        dimensions: Dimensions,
+        color: EncoderColor,
+        options: PngOptions,
+        output: BoundedWriter<T>,
+    ) -> Result<Self> {
         let mut encoder = png::Encoder::new(output.clone(), dimensions.width, dimensions.height);
         encoder.set_color(color.png_color_type());
         encoder.set_depth(png::BitDepth::Eight);
@@ -97,8 +124,8 @@ impl PngRowSink {
     }
 }
 
-impl RgbaRowSink for PngRowSink {
-    type Output = Vec<u8>;
+impl<T: OutputTarget + 'static> RgbaRowSink for PngEncoderRowSink<T> {
+    type Output = T::Finished;
     type Error = Error;
 
     fn push_row(&mut self, y: u32, rgba: &[u8]) -> Result<()> {
@@ -151,7 +178,7 @@ impl RgbaRowSink for PngRowSink {
         Ok(())
     }
 
-    fn finish(self) -> Result<Vec<u8>> {
+    fn finish(self) -> Result<Self::Output> {
         if self.next_y != self.dimensions.height {
             return Err(CoreError::IncompleteImage {
                 expected_rows: self.dimensions.height,
@@ -162,7 +189,7 @@ impl RgbaRowSink for PngRowSink {
         self.stream
             .finish()
             .map_err(|error| self.output.map_external_error(error.to_string()))?;
-        self.output.into_bytes().map_err(Into::into)
+        self.output.into_output().map_err(Into::into)
     }
 }
 

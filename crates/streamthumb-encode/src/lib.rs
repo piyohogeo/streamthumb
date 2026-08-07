@@ -5,6 +5,6 @@ mod jpeg;
 mod writer;
 
 pub use error::{Error, Result};
-pub use jpeg::{JpegOptions, JpegRowSink, JpegSubsampling};
+pub use jpeg::{JpegOptions, JpegRowSink, JpegSubsampling, JpegWriterRowSink};
 #[doc(hidden)]
-pub use writer::BoundedWriter;
+pub use writer::{BoundedWriter, BufferedOutput, ExternalOutput, OutputTarget};

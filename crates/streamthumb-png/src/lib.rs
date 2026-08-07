@@ -7,7 +7,9 @@ mod options;
 mod output;
 
 pub use decoder::{
-    DecodedPngInfo, RgbaRow, decode_png_rows, thumbnail_png, thumbnail_png_rgba,
+    DecodedPngInfo, RgbaRow, decode_png_rows, thumbnail_jpeg_to_writer,
+    thumbnail_jpeg_to_writer_with_options, thumbnail_png, thumbnail_png_rgba,
+    thumbnail_png_to_writer, thumbnail_png_to_writer_with_encoder_options,
     thumbnail_png_with_encoder_options, thumbnail_png_with_jpeg_options,
 };
 pub use error::{Error, Result, UnsupportedFeature};

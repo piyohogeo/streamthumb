@@ -38,7 +38,10 @@ cargo run -p streamthumb-cli -- input.png output.png --png-color auto --png-comp
 
 The Rust API exposes `PngOptions` through
 `thumbnail_png_with_encoder_options`; the existing `thumbnail_png` function
-retains its RGBA8, balanced-compression defaults.
+retains its RGBA8, balanced-compression defaults. Native callers that do not
+need an owned encoded buffer can use `thumbnail_png_to_writer` or
+`thumbnail_png_to_writer_with_encoder_options`. These APIs preserve the encoded
+byte cap while excluding the completed encoded image from working memory.
 
 CLI values match the WebAssembly literals: color accepts `auto`, `rgba8`,
 `rgb8`, `grayscale-alpha8`, or `grayscale8`; compression accepts `none`,
@@ -55,7 +58,13 @@ cargo run -p streamthumb-cli -- input.png output.jpg --jpeg-quality 85 --jpeg-ba
 
 The Rust API exposes `JpegOptions` through
 `thumbnail_png_with_jpeg_options`. JPEG output is baseline sequential and
-supports 4:2:0, 4:2:2, and 4:4:4 subsampling.
+supports 4:2:0, 4:2:2, and 4:4:4 subsampling. Direct native output uses
+`thumbnail_jpeg_to_writer` or `thumbnail_jpeg_to_writer_with_options`.
+
+The CLI uses the direct writer APIs for both codecs, so it writes encoded bytes
+to the destination file without retaining a second complete encoded copy.
+Writer APIs take ownership of the writer and return `ThumbnailInfo`; existing
+buffer-returning APIs and the WebAssembly API remain unchanged.
 
 ## WebAssembly
 

@@ -1,3 +1,7 @@
+use crate::memory::{
+    estimate_encoded_output_limit_bytes, estimate_sparse_writer_working_memory_for_output,
+    estimate_writer_working_memory_for_output,
+};
 use crate::{
     Dimensions, Error, Fit, LimitKind, MemoryEstimate, Result, ThumbnailOptions,
     contain_dimensions, cover_dimensions, estimate_sparse_working_memory_for_output,
@@ -26,11 +30,13 @@ pub struct ProcessingPlan {
     pub source: Dimensions,
     pub output: Dimensions,
     pub memory: MemoryEstimate,
+    /// Maximum encoded bytes accepted by either buffered or direct output.
+    pub encoded_output_limit_bytes: usize,
 }
 
 /// Validates limits and creates a processing plan before decoding begins.
 pub fn plan_thumbnail(input: InputInfo, options: &ThumbnailOptions) -> Result<ProcessingPlan> {
-    plan_thumbnail_with_layout(input, options, false)
+    plan_thumbnail_with_layout(input, options, false, true)
 }
 
 /// Creates a processing plan for arbitrary-order sparse source samples.
@@ -38,13 +44,30 @@ pub fn plan_thumbnail_sparse(
     input: InputInfo,
     options: &ThumbnailOptions,
 ) -> Result<ProcessingPlan> {
-    plan_thumbnail_with_layout(input, options, true)
+    plan_thumbnail_with_layout(input, options, true, true)
+}
+
+/// Creates a plan whose encoded result is forwarded to a caller-owned writer.
+pub fn plan_thumbnail_to_writer(
+    input: InputInfo,
+    options: &ThumbnailOptions,
+) -> Result<ProcessingPlan> {
+    plan_thumbnail_with_layout(input, options, false, false)
+}
+
+/// Creates a sparse-input plan whose encoded result is forwarded to a writer.
+pub fn plan_thumbnail_sparse_to_writer(
+    input: InputInfo,
+    options: &ThumbnailOptions,
+) -> Result<ProcessingPlan> {
+    plan_thumbnail_with_layout(input, options, true, false)
 }
 
 fn plan_thumbnail_with_layout(
     input: InputInfo,
     options: &ThumbnailOptions,
     sparse: bool,
+    retain_encoded_output: bool,
 ) -> Result<ProcessingPlan> {
     validate_non_zero_limits(options)?;
     validate_input(input, options)?;
@@ -58,21 +81,33 @@ fn plan_thumbnail_with_layout(
     };
     validate_output(output, options)?;
 
-    let memory = if sparse {
-        estimate_sparse_working_memory_for_output(
+    let memory = match (sparse, retain_encoded_output) {
+        (true, true) => estimate_sparse_working_memory_for_output(
             input.dimensions,
             output,
             input.source_bytes_per_pixel,
             options.output,
-        )?
-    } else {
-        estimate_working_memory_for_output(
+        )?,
+        (false, true) => estimate_working_memory_for_output(
             input.dimensions,
             output,
             input.source_bytes_per_pixel,
             options.output,
-        )?
+        )?,
+        (true, false) => estimate_sparse_writer_working_memory_for_output(
+            input.dimensions,
+            output,
+            input.source_bytes_per_pixel,
+            options.output,
+        )?,
+        (false, false) => estimate_writer_working_memory_for_output(
+            input.dimensions,
+            output,
+            input.source_bytes_per_pixel,
+            options.output,
+        )?,
     };
+    let encoded_output_limit_bytes = estimate_encoded_output_limit_bytes(output, options.output)?;
     enforce(
         LimitKind::WorkingMemory,
         usize_to_u64(memory.total_bytes)?,
@@ -83,6 +118,7 @@ fn plan_thumbnail_with_layout(
         source: input.dimensions,
         output,
         memory,
+        encoded_output_limit_bytes,
     })
 }
 
@@ -341,5 +377,45 @@ mod tests {
         let plan = plan_thumbnail(input(1_000, 1_000), &options).unwrap();
         assert_eq!(plan.source, Dimensions::new(1_000, 1_000).unwrap());
         assert_eq!(plan.output, Dimensions::new(320, 180).unwrap());
+    }
+
+    #[test]
+    fn writer_plan_preserves_the_encoded_limit_without_reserving_the_result() {
+        let options = ThumbnailOptions {
+            max_width: 512,
+            max_height: 512,
+            output: crate::OutputFormat::Png,
+            ..ThumbnailOptions::default()
+        };
+        let buffered = plan_thumbnail(input(512, 512), &options).unwrap();
+        let writer = plan_thumbnail_to_writer(input(512, 512), &options).unwrap();
+
+        assert_eq!(
+            writer.encoded_output_limit_bytes,
+            buffered.encoded_output_limit_bytes
+        );
+        assert_eq!(writer.memory.encoded_output_bytes, 0);
+        assert_eq!(
+            writer.memory.total_bytes + buffered.memory.encoded_output_bytes,
+            buffered.memory.total_bytes
+        );
+    }
+
+    #[test]
+    fn writer_plan_can_fit_a_budget_that_rejects_buffered_output() {
+        let mut options = ThumbnailOptions {
+            max_width: 512,
+            max_height: 512,
+            output: crate::OutputFormat::Jpeg,
+            ..ThumbnailOptions::default()
+        };
+        let writer = plan_thumbnail_to_writer(input(512, 512), &options).unwrap();
+        options.limits.max_working_memory_bytes = writer.memory.total_bytes;
+
+        assert!(plan_thumbnail_to_writer(input(512, 512), &options).is_ok());
+        assert_limit(
+            plan_thumbnail(input(512, 512), &options).unwrap_err(),
+            LimitKind::WorkingMemory,
+        );
     }
 }

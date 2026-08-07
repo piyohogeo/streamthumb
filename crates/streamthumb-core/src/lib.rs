@@ -20,5 +20,8 @@ pub use memory::{
     estimate_working_memory_for_output,
 };
 pub use options::{Filter, Fit, OutputFormat, ThumbnailOptions};
-pub use plan::{InputInfo, ProcessingPlan, ThumbnailInfo, plan_thumbnail, plan_thumbnail_sparse};
+pub use plan::{
+    InputInfo, ProcessingPlan, ThumbnailInfo, plan_thumbnail, plan_thumbnail_sparse,
+    plan_thumbnail_sparse_to_writer, plan_thumbnail_to_writer,
+};
 pub use resample::{AreaDownsampler, RgbaCollector, RgbaImage, RgbaRowSink, SparseAreaDownsampler};

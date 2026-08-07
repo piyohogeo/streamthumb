@@ -34,8 +34,9 @@ pub struct MemoryEstimate {
 /// The decoder allowance includes three packed source rows and conservative
 /// staging space for DEFLATE history and buffered decompressed data. Accumulator
 /// constants reserve four premultiplied `u128` color channels plus one weight per
-/// output pixel. Raw RGBA output retains the full result; encoded output retains
-/// one completed RGBA row plus only the codec-specific streaming state.
+/// output pixel. Raw RGBA output retains the full result. Buffered encoded
+/// output retains one completed RGBA row, codec state, and the bounded encoded
+/// result; direct writer plans exclude the caller-owned encoded destination.
 pub fn estimate_working_memory(
     source: Dimensions,
     output: Dimensions,
@@ -50,6 +51,37 @@ pub fn estimate_working_memory_for_output(
     output: Dimensions,
     source_bytes_per_pixel: u8,
     output_format: OutputFormat,
+) -> Result<MemoryEstimate> {
+    estimate_working_memory_for_output_layout(
+        source,
+        output,
+        source_bytes_per_pixel,
+        output_format,
+        true,
+    )
+}
+
+pub(crate) fn estimate_writer_working_memory_for_output(
+    source: Dimensions,
+    output: Dimensions,
+    source_bytes_per_pixel: u8,
+    output_format: OutputFormat,
+) -> Result<MemoryEstimate> {
+    estimate_working_memory_for_output_layout(
+        source,
+        output,
+        source_bytes_per_pixel,
+        output_format,
+        false,
+    )
+}
+
+fn estimate_working_memory_for_output_layout(
+    source: Dimensions,
+    output: Dimensions,
+    source_bytes_per_pixel: u8,
+    output_format: OutputFormat,
+    retain_encoded_output: bool,
 ) -> Result<MemoryEstimate> {
     if source_bytes_per_pixel == 0 {
         return Err(Error::InvalidSourceBytesPerPixel);
@@ -87,7 +119,7 @@ pub fn estimate_working_memory_for_output(
         &[output_pixels, NORMALIZED_PIXEL_BYTES],
         "output RGBA buffer",
     )?;
-    let (output_rgba_bytes, encoder_state_bytes, encoded_output_bytes) = match output_format {
+    let (output_rgba_bytes, encoder_state_bytes, encoded_output_limit_bytes) = match output_format {
         OutputFormat::Rgba => (raw_rgba_bytes, 0, 0),
         OutputFormat::Png => (
             0,
@@ -99,6 +131,11 @@ pub fn estimate_working_memory_for_output(
             estimate_jpeg_encoder_state_bytes(output)?,
             estimate_encoded_jpeg_bytes(output)?,
         ),
+    };
+    let encoded_output_bytes = if retain_encoded_output {
+        encoded_output_limit_bytes
+    } else {
+        0
     };
 
     let total_bytes = checked_sum(
@@ -161,6 +198,52 @@ pub fn estimate_sparse_working_memory_for_output(
     estimate.vertical_accumulator_bytes = 0;
     estimate.sparse_accumulator_bytes = sparse_accumulator_bytes;
     Ok(estimate)
+}
+
+pub(crate) fn estimate_sparse_writer_working_memory_for_output(
+    source: Dimensions,
+    output: Dimensions,
+    source_bytes_per_pixel: u8,
+    output_format: OutputFormat,
+) -> Result<MemoryEstimate> {
+    let mut estimate = estimate_writer_working_memory_for_output(
+        source,
+        output,
+        source_bytes_per_pixel,
+        output_format,
+    )?;
+    let output_pixels =
+        usize::try_from(output.pixels()?).map_err(|_| overflow("sparse output pixel count"))?;
+    let sparse_accumulator_bytes = checked_product(
+        &[output_pixels, SPARSE_ACCUMULATOR_BYTES_PER_PIXEL],
+        "sparse output accumulator",
+    )?;
+    estimate.total_bytes = estimate
+        .total_bytes
+        .checked_sub(estimate.horizontal_accumulator_bytes)
+        .and_then(|value| value.checked_sub(estimate.vertical_accumulator_bytes))
+        .and_then(|value| value.checked_add(sparse_accumulator_bytes))
+        .ok_or_else(|| overflow("sparse writer total working memory"))?;
+    estimate.horizontal_accumulator_bytes = 0;
+    estimate.vertical_accumulator_bytes = 0;
+    estimate.sparse_accumulator_bytes = sparse_accumulator_bytes;
+    Ok(estimate)
+}
+
+pub(crate) fn estimate_encoded_output_limit_bytes(
+    output: Dimensions,
+    output_format: OutputFormat,
+) -> Result<usize> {
+    match output_format {
+        OutputFormat::Png => {
+            let pixels = usize::try_from(output.pixels()?)
+                .map_err(|_| overflow("output pixel count conversion"))?;
+            let rgba_bytes = checked_product(&[pixels, NORMALIZED_PIXEL_BYTES], "output RGBA")?;
+            estimate_encoded_png_bytes(output, rgba_bytes)
+        }
+        OutputFormat::Jpeg => estimate_encoded_jpeg_bytes(output),
+        OutputFormat::Rgba => Ok(0),
+    }
 }
 
 fn estimate_encoded_png_bytes(output: Dimensions, rgba_bytes: usize) -> Result<usize> {

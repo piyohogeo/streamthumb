@@ -8,7 +8,10 @@ use std::time::Instant;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat};
 use streamthumb_core::{Dimensions, Fit, OutputFormat, ThumbnailOptions, contain_dimensions};
-use streamthumb_png::{ThumbnailOutput, thumbnail_png};
+use streamthumb_png::{
+    JpegOptions, PngOptions, ThumbnailOutput, thumbnail_jpeg_to_writer_with_options, thumbnail_png,
+    thumbnail_png_to_writer_with_encoder_options,
+};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -44,6 +47,13 @@ const SMOKE_CASES: &[Case] = &[
         width: 2_048,
         height: 2_048,
         pattern: Pattern::Blank,
+        interlaced: false,
+    },
+    Case {
+        name: "square-noise",
+        width: 2_048,
+        height: 2_048,
+        pattern: Pattern::Noise,
         interlaced: false,
     },
     Case {
@@ -131,7 +141,7 @@ fn main() -> Result<()> {
                 "usage:\n  streamthumb-benchmarks generate-smoke <directory>\n  \
                  streamthumb-benchmarks generate-memory <directory>\n  \
                  streamthumb-benchmarks generate-adam7 <directory>\n  \
-                 streamthumb-benchmarks run <streamthumb-png|streamthumb-jpeg|streamthumb-cover-png|streamthumb-cover-jpeg|image-rs> <input> <output> <max-dimension>"
+                 streamthumb-benchmarks run <streamthumb-png|streamthumb-jpeg|streamthumb-writer-png|streamthumb-writer-jpeg|streamthumb-cover-png|streamthumb-cover-jpeg|image-rs> <input> <output> <max-dimension>"
             );
             Err("invalid benchmark arguments".into())
         }
@@ -320,6 +330,20 @@ fn run_method(method: &str, input: &Path, output: &Path, max_dimension: u32) -> 
             OutputFormat::Jpeg,
             Fit::Contain,
         )?,
+        "streamthumb-writer-png" => run_streamthumb_writer(
+            &input_bytes,
+            output,
+            max_dimension,
+            OutputFormat::Png,
+            Fit::Contain,
+        )?,
+        "streamthumb-writer-jpeg" => run_streamthumb_writer(
+            &input_bytes,
+            output,
+            max_dimension,
+            OutputFormat::Jpeg,
+            Fit::Contain,
+        )?,
         "streamthumb-cover-png" => run_streamthumb(
             &input_bytes,
             output,
@@ -351,6 +375,45 @@ fn run_method(method: &str, input: &Path, output: &Path, max_dimension: u32) -> 
         output_bytes
     );
     Ok(())
+}
+
+fn run_streamthumb_writer(
+    input: &[u8],
+    output: &Path,
+    max_dimension: u32,
+    format: OutputFormat,
+    fit: Fit,
+) -> Result<(u32, u32, u32, u32, u64)> {
+    let mut options = ThumbnailOptions {
+        max_width: max_dimension,
+        max_height: max_dimension,
+        output: format,
+        fit,
+        ..ThumbnailOptions::default()
+    };
+    options.limits.max_input_bytes = u64::try_from(input.len())?.saturating_add(1);
+    options.limits.max_working_memory_bytes = 512 * 1024 * 1024;
+    let file = BufWriter::new(File::create(output)?);
+    let info = match format {
+        OutputFormat::Png => thumbnail_png_to_writer_with_encoder_options(
+            input,
+            &options,
+            &PngOptions::default(),
+            file,
+        )?,
+        OutputFormat::Jpeg => {
+            thumbnail_jpeg_to_writer_with_options(input, &options, &JpegOptions::default(), file)?
+        }
+        OutputFormat::Rgba => return Err("writer benchmark requires encoded output".into()),
+    };
+    let (source_width, source_height) = png_dimensions(input)?;
+    Ok((
+        source_width,
+        source_height,
+        info.width,
+        info.height,
+        fs::metadata(output)?.len(),
+    ))
 }
 
 fn run_streamthumb(

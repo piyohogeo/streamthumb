@@ -1,9 +1,9 @@
-use std::{env, error::Error, fmt, fs, path::PathBuf, process::ExitCode};
+use std::{env, error::Error, fmt, fs, io::BufWriter, path::PathBuf, process::ExitCode};
 
 use streamthumb_core::{Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
     JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngOptions,
-    ThumbnailOutput, thumbnail_png_with_encoder_options, thumbnail_png_with_jpeg_options,
+    thumbnail_jpeg_to_writer_with_options, thumbnail_png_to_writer_with_encoder_options,
 };
 
 fn main() -> ExitCode {
@@ -28,21 +28,27 @@ fn run() -> Result<(), CliError> {
     }
 
     let input = fs::read(&config.input)?;
-    let output = match config.options.output {
+    let output_file = fs::File::create(&config.output)?;
+    let output = BufWriter::new(output_file);
+    match config.options.output {
         OutputFormat::Png => {
-            thumbnail_png_with_encoder_options(&input, &config.options, &config.png_options)
+            thumbnail_png_to_writer_with_encoder_options(
+                &input,
+                &config.options,
+                &config.png_options,
+                output,
+            )?;
         }
         OutputFormat::Jpeg => {
-            thumbnail_png_with_jpeg_options(&input, &config.options, &config.jpeg_options)
+            thumbnail_jpeg_to_writer_with_options(
+                &input,
+                &config.options,
+                &config.jpeg_options,
+                output,
+            )?;
         }
         OutputFormat::Rgba => unreachable!("the CLI does not expose raw RGBA output"),
-    }?;
-    let ThumbnailOutput::Encoded { bytes, .. } = output else {
-        return Err(CliError::Message(
-            "internal error: CLI requested a non-encoded output".to_owned(),
-        ));
-    };
-    fs::write(&config.output, bytes)?;
+    }
     Ok(())
 }
 
