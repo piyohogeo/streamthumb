@@ -118,10 +118,11 @@
             <p class="fine-print">These are processing limits passed directly to WebAssembly, not total browser-memory limits.</p>
             <div class="control-pair memory-control">
               <label for="max-memory">Working memory limit <output id="max-memory-bytes">4,194,304 bytes</output></label>
-              <div class="range-number"><input id="max-memory-range" type="range" min="1" max="256" value="4" /><input id="max-memory" type="number" min="1" max="256" value="4" required /><span>MiB</span></div>
+              <div class="range-number"><input id="max-memory-range" type="range" min="128" max="131072" step="128" value="4096" /><input id="max-memory" type="number" min="128" max="262144" step="128" value="4096" required /><span>KiB</span></div>
               <div class="presets" aria-label="Memory limit presets">
-                <button type="button" data-memory="4">4</button><button type="button" data-memory="8">8</button><button type="button" data-memory="16">16</button><button type="button" data-memory="32">32</button><button type="button" data-memory="64">64</button><button type="button" data-memory="128">128</button>
+                <button type="button" data-memory-kib="128">128 KiB</button><button type="button" data-memory-kib="256">256 KiB</button><button type="button" data-memory-kib="512">512 KiB</button><button type="button" data-memory-kib="1024">1 MiB</button><button type="button" data-memory-kib="4096">4 MiB</button><button type="button" data-memory-kib="16384">16 MiB</button>
               </div>
+              <p class="fine-print">Try 128 KiB to see a planned-memory rejection before decoding starts.</p>
             </div>
             <div class="limit-grid">
               <label>Input bytes <input id="max-input-bytes" type="number" min="1" value="67108864" required /></label>

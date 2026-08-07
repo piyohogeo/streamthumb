@@ -1392,3 +1392,9 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 2. The demo-specific working-memory limit defaults to 4 MiB while the WebAssembly API default remains 32 MiB. Reset behavior derives from the HTML defaults and returns the UI to 4 MiB.
 3. The bundled input is generated deterministically during the Pages build as a 2048 x 2048, 8-bit RGBA PNG with a repeated translucent tile pattern. The build rejects dimensions, color format, or encoded size at or above 256 KiB if they regress.
 4. Chrome smoke coverage verifies the exact compact title, privacy placement, 4 MiB initial value, large sample dimensions, and the existing output and recovery behavior.
+
+### Phase 40 decisions
+
+1. The Pages working-memory control uses KiB so users can select limits from 128 KiB instead of being constrained to whole MiB values. The 4096 KiB initial value preserves the existing 4 MiB demo default.
+2. Presets emphasize 128, 256, and 512 KiB failure-boundary exploration while retaining convenient 1, 4, and 16 MiB choices.
+3. The bundled sample and 128 KiB preset provide a deterministic preflight rejection before pixel decoding. Chrome smoke coverage verifies rejection at 128 KiB and recovery after restoring 4096 KiB.

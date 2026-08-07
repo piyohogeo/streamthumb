@@ -1,4 +1,5 @@
 const MIB = 1024 * 1024;
+const KIB = 1024;
 const memoryFields = [
   ["decoderRowsBytes", "Decoder rows"],
   ["decoderStagingBytes", "Decoder staging"],
@@ -66,7 +67,7 @@ function hexToRgb(value) {
 }
 
 function collectOptions() {
-  const memoryMiB = finiteInteger("max-memory");
+  const memoryKiB = finiteInteger("max-memory");
   const output = selectedValue("output");
   const options = {
     maxWidth: finiteInteger("max-width"),
@@ -82,7 +83,7 @@ function collectOptions() {
     maxOutputWidth: finiteInteger("max-output-width"),
     maxOutputHeight: finiteInteger("max-output-height"),
     maxOutputPixels: finiteInteger("max-output-pixels"),
-    maxMemoryBytes: memoryMiB * MIB,
+    maxMemoryBytes: memoryKiB * KIB,
   };
   if (output === "png") {
     options.png = {
@@ -315,8 +316,8 @@ function updateOutputControls() {
 }
 
 function updateMemoryLabel() {
-  const mib = byId("max-memory").valueAsNumber;
-  byId("max-memory-bytes").textContent = Number.isFinite(mib) ? `${(mib * MIB).toLocaleString()} bytes` : "Invalid";
+  const kib = byId("max-memory").valueAsNumber;
+  byId("max-memory-bytes").textContent = Number.isFinite(kib) ? `${(kib * KIB).toLocaleString()} bytes` : "Invalid";
 }
 
 syncPair("max-width-range", "max-width");
@@ -331,9 +332,9 @@ form.addEventListener("change", (event) => {
 });
 byId("max-memory").addEventListener("input", updateMemoryLabel);
 byId("max-memory-range").addEventListener("input", updateMemoryLabel);
-document.querySelectorAll("[data-memory]").forEach((button) => button.addEventListener("click", () => {
-  byId("max-memory").value = button.dataset.memory;
-  byId("max-memory-range").value = button.dataset.memory;
+document.querySelectorAll("[data-memory-kib]").forEach((button) => button.addEventListener("click", () => {
+  byId("max-memory").value = button.dataset.memoryKib;
+  byId("max-memory-range").value = button.dataset.memoryKib;
   updateMemoryLabel();
 }));
 

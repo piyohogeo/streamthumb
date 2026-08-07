@@ -69,7 +69,7 @@ async function verifyPageUi() {
   await waitFor(() => id("status").dataset.ready === "true", "Pages UI worker did not become ready.");
   assert(doc.querySelector(".hero h1").textContent === "streamthumb / WebAssembly demo", "The compact demo title was not rendered.");
   assert(id("drop-zone").textContent.includes("The image is never uploaded to a server."), "The drop zone omitted the privacy note.");
-  assert(id("max-memory").value === "4", "The UI memory limit did not default to 4 MiB.");
+  assert(id("max-memory").value === "4096", "The UI memory limit did not default to 4096 KiB.");
   id("sample-button").click();
   await waitFor(() => id("result-label").textContent === "READY", "Bundled sample was not inspected.");
   assert(id("input-dimensions").textContent === "2048 × 2048", "The bundled sample did not expose large dimensions.");
@@ -90,12 +90,14 @@ async function verifyPageUi() {
   id("allow-upscale").checked = true;
   id("max-width").value = "512";
   id("max-height").value = "512";
-  id("max-memory").value = "1";
+  doc.querySelector('[data-memory-kib="128"]').click();
+  assert(id("max-memory").value === "128", "The 128 KiB preset did not update the memory limit.");
   id("run-button").click();
   await waitFor(() => id("result-label").textContent === "FAILED", "The UI did not show the planned-memory rejection.");
   assert(id("error-detail").textContent.includes("Required (planned)") && id("error-detail").textContent.includes("Configured limit"), "The UI omitted typed memory-limit values.");
 
-  id("max-memory").value = "4";
+  doc.querySelector('[data-memory-kib="4096"]').click();
+  assert(id("max-memory").value === "4096", "The 4 MiB preset did not restore the memory limit.");
   id("run-button").click();
   await waitFor(() => id("result-label").textContent === "SUCCESS", "The UI did not recover after restoring the limit.");
   frame.remove();

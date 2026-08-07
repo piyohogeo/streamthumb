@@ -99,7 +99,9 @@ synchronous range reads instead of complete JavaScript and WebAssembly input
 copies.
 The bundled demo sample is a highly compressible 2048 x 2048 RGBA PNG, and the
 demo working-memory limit starts at 4 MiB so the bounded-memory behavior is
-visible without changing the library's 32 MiB API default.
+visible without changing the library's 32 MiB API default. The demo control is
+expressed in KiB and accepts values from 128 KiB, making preflight rejection
+easy to reproduce without attempting a large allocation.
 
 Build a browser-targeted package with:
 

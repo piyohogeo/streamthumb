@@ -33,6 +33,8 @@ project follows Semantic Versioning.
 - The Pages header is compact, its privacy note is next to file selection, its
   UI memory limit defaults to 4 MiB, and its generated 2048-square RGBA sample
   combines large decoded dimensions with a small encoded download.
+- The Pages working-memory control now accepts 128 KiB increments and includes
+  low-memory presets for demonstrating preflight rejection before decoding.
 - Release WebAssembly packages now use `wasm-opt -Oz` explicitly so the pinned
   Rust 1.85 build remains within the existing package-size budget.
 - Release builds use fat LTO, one code-generation unit, and aborting panics to

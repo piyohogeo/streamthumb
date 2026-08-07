@@ -87,7 +87,7 @@ input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-v
 .memory-control label { display: flex; justify-content: space-between; gap: .5rem; }
 .memory-control label output { color: var(--muted); font: .7rem/1.3 monospace; }
 .presets { display: grid; grid-template-columns: repeat(6, 1fr); gap: .3rem; }
-.presets button { padding: .35rem .1rem; border: 1px solid var(--line); border-radius: .4rem; background: white; cursor: pointer; font-size: .7rem; }
+.presets button { padding: .35rem .1rem; border: 1px solid var(--line); border-radius: .4rem; background: white; cursor: pointer; font-size: .65rem; }
 .limit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
 .limit-grid label { display: grid; gap: .3rem; }
 .form-actions { display: grid; grid-template-columns: 1fr auto; gap: .5rem; }
