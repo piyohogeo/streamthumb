@@ -2,16 +2,11 @@
 
 WebAssembly bindings for the memory-bounded `streamthumb` PNG thumbnail pipeline.
 
-## Build
+## Installation
 
 ```text
-node scripts/build-npm-package.mjs
-node scripts/check-npm-package.mjs
+npm install @streamthumb/wasm
 ```
-
-Run these commands from the repository root. They create the unpublished
-`@streamthumb/wasm` package in `target/npm-package` and verify the exact files
-that npm would include.
 
 ## API
 
@@ -86,3 +81,22 @@ The API has no dependency on DOM, Canvas, filesystem, threads, `SharedArrayBuffe
 
 See the [WebAssembly API contract](https://github.com/piyohogeo/streamthumb/blob/main/docs/WASM_API.md)
 for the complete option, result, input, and error contracts.
+
+Runnable source examples are available for
+[browsers](https://github.com/piyohogeo/streamthumb/tree/main/examples/browser),
+[Node.js](https://github.com/piyohogeo/streamthumb/tree/main/examples/node), and
+[Deno](https://github.com/piyohogeo/streamthumb/tree/main/examples/deno).
+
+## Repository development
+
+Run these commands from the repository root to build and inspect the
+unpublished package:
+
+```text
+node scripts/build-npm-package.mjs
+node scripts/check-npm-package.mjs
+```
+
+The package is created in `target/npm-package`. Normal CI installs its tarball
+into isolated browser, Node.js, and Deno consumers before retaining it as an
+artifact.

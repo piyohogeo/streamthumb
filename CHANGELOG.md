@@ -22,3 +22,5 @@ project follows Semantic Versioning.
   resolution, explicit WebAssembly initialization, and PNG generation.
 - Runnable browser, Node.js, and Deno examples, a complete WebAssembly API
   contract, and CI smoke tests that execute the public example sources.
+- Release-candidate artifact verification and an explicit, no-rebuild release
+  procedure for the npm package and attached GitHub assets.

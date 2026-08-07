@@ -16,6 +16,10 @@ Browsers can let the initializer fetch the adjacent WebAssembly file. Filesystem
 
 Initialization is asynchronous. `thumbnailPng` is synchronous after initialization.
 
+Advanced consumers may instead call `initSync({ module })` with WebAssembly
+bytes or a precompiled `WebAssembly.Module`. The asynchronous initializer is
+preferred unless the caller already owns a synchronously available module.
+
 ## Function
 
 ```ts
@@ -64,7 +68,20 @@ The requested bounding box and all applicable resource limits must pass. Setting
 
 PNG output is a complete encoded PNG. RGBA output is tightly packed, row-major, straight-alpha RGBA8 data whose length is `width * height * 4`.
 
-Reading `bytes` copies the output from WebAssembly. Read all required properties, then call `result.free()` to release the result's WebAssembly allocation promptly. The copied `Uint8Array` remains valid after `free()`.
+Reading `bytes` copies the output from WebAssembly. Read all required properties, then call `result.free()` to release the result's WebAssembly allocation promptly. `ThumbnailResult` also implements `Symbol.dispose` for runtimes that support explicit resource management. The copied `Uint8Array` remains valid after disposal.
+
+## Utility exports
+
+```ts
+function streamthumbVersion(): string;
+function wasmMemoryBytes(): number;
+```
+
+`streamthumbVersion` returns the package version embedded at build time.
+`wasmMemoryBytes` returns the current WebAssembly linear-memory size in bytes.
+WebAssembly linear memory only grows, so this value is a process-local
+high-water observation intended for diagnostics and benchmarks, not the exact
+memory cost of one thumbnail operation.
 
 ## Accepted PNG input
 

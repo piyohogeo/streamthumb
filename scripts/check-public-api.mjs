@@ -35,6 +35,14 @@ const api = await source("docs/WASM_API.md");
 for (const [name, defaultValue] of optionDefaults) {
   requireText(api, `| \`${name}\` | ${defaultValue} |`, "docs/WASM_API.md");
 }
+for (const publicExport of [
+  "initSync({ module })",
+  "`Symbol.dispose`",
+  "function streamthumbVersion(): string;",
+  "function wasmMemoryBytes(): number;",
+]) {
+  requireText(api, publicExport, "docs/WASM_API.md");
+}
 
 const options = await source("crates/streamthumb-core/src/options.rs");
 for (const implementationDefault of [

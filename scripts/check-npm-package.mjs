@@ -15,20 +15,40 @@ const declarations = await readFile(
   path.join(packageDirectory, "streamthumb_wasm.d.ts"),
   "utf8",
 );
+const packageReadme = await readFile(
+  path.join(packageDirectory, "README.md"),
+  "utf8",
+);
+const cargoToml = await readFile(path.join(root, "Cargo.toml"), "utf8");
 
 const expectedManifest = {
   name: "@streamthumb/wasm",
   license: "MIT OR Apache-2.0",
   type: "module",
+  description:
+    "Memory-bounded streaming PNG thumbnail generation for WebAssembly",
   main: "./streamthumb_wasm.js",
   module: "./streamthumb_wasm.js",
   types: "./streamthumb_wasm.d.ts",
+  homepage: "https://github.com/piyohogeo/streamthumb#readme",
+  bugs: "https://github.com/piyohogeo/streamthumb/issues",
 };
 
 for (const [key, value] of Object.entries(expectedManifest)) {
   if (manifest[key] !== value) {
     throw new Error(`package.json ${key} must be ${JSON.stringify(value)}`);
   }
+}
+const workspaceSection = cargoToml.match(
+  /^\[workspace\.package\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m,
+)?.[1];
+const workspaceVersion = workspaceSection?.match(
+  /^version\s*=\s*"([^"]+)"\s*$/m,
+)?.[1];
+if (!workspaceVersion || manifest.version !== workspaceVersion) {
+  throw new Error(
+    `package.json version ${manifest.version} does not match workspace version ${workspaceVersion}`,
+  );
 }
 if (manifest.publishConfig?.access !== "public") {
   throw new Error("The scoped package must set publishConfig.access to public.");
@@ -54,6 +74,31 @@ for (const [key, value] of Object.entries(expectedStructuredMetadata)) {
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version)) {
   throw new Error(`package.json version is not a supported semantic version: ${manifest.version}`);
 }
+const expectedKeywords = ["png", "thumbnail", "webassembly", "wasm", "image"];
+if (JSON.stringify(manifest.keywords) !== JSON.stringify(expectedKeywords)) {
+  throw new Error("package.json keywords do not match the release contract.");
+}
+
+for (const expected of [
+  "npm install @streamthumb/wasm",
+  "result.free();",
+  "https://github.com/piyohogeo/streamthumb/blob/main/docs/WASM_API.md",
+  "## Node.js and Deno",
+]) {
+  if (!packageReadme.includes(expected)) {
+    throw new Error(`Published README is missing: ${expected}`);
+  }
+}
+
+for (const license of ["LICENSE-MIT", "LICENSE-APACHE"]) {
+  const [sourceLicense, packageLicense] = await Promise.all([
+    readFile(path.join(root, license)),
+    readFile(path.join(packageDirectory, license)),
+  ]);
+  if (!sourceLicense.equals(packageLicense)) {
+    throw new Error(`${license} does not match the repository license text.`);
+  }
+}
 
 const declarationContract = [
   "export interface ThumbnailOptions",
@@ -61,6 +106,12 @@ const declarationContract = [
   'export type ThumbnailFilter = "area";',
   'export type ThumbnailOutputFormat = "png" | "rgba";',
   "options?: ThumbnailOptions | null,",
+  "export class ThumbnailResult",
+  "[Symbol.dispose](): void;",
+  "export function streamthumbVersion(): string;",
+  "export function wasmMemoryBytes(): number;",
+  "export function initSync(",
+  "export default function __wbg_init",
 ];
 for (const expected of declarationContract) {
   if (!declarations.includes(expected)) {
