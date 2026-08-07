@@ -10,4 +10,5 @@
 /benchmarks/wasm-pkg/
 /benchmarks/node_modules/
 /tests/npm-browser-consumer/node_modules/
+/tests/npm-runtime-consumer/node_modules/
 **/*.rs.bk

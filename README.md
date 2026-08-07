@@ -33,6 +33,9 @@ The generated package is prepared as `@streamthumb/wasm` in
 contents, installs it into an empty consumer project, checks its TypeScript
 declarations, bundles it with pinned esbuild, exercises it in Chrome, and then
 stores the unpublished tarball as the `npm-package` artifact.
+The same installed tarball is also exercised in Node.js and pinned Deno with
+explicit WebAssembly bytes, so the package remains free of runtime-specific
+filesystem dependencies.
 See [docs/RELEASING.md](docs/RELEASING.md) for the manual release process.
 The manually dispatched `Release Candidate` workflow additionally records the
 source revision, pinned build tools, byte size, and SHA-256 checksum without

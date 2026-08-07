@@ -47,4 +47,38 @@ The package exports `ThumbnailOptions`, `ThumbnailFit`, `ThumbnailFilter`, and
 `ThumbnailOutputFormat` TypeScript types. Every option is optional, and
 `thumbnailPng` also accepts an omitted or `null` options value.
 
+## Node.js and Deno
+
+Browsers can call `init()` and let the module fetch its adjacent WebAssembly
+file. Filesystem consumers should resolve the package entry point and pass the
+WebAssembly bytes explicitly.
+
+Node.js:
+
+```js
+import { readFile } from "node:fs/promises";
+import init, { thumbnailPng } from "@streamthumb/wasm";
+
+const packageModule = import.meta.resolve("@streamthumb/wasm");
+const wasm = await readFile(
+  new URL("streamthumb_wasm_bg.wasm", packageModule),
+);
+await init({ module_or_path: wasm });
+```
+
+Deno:
+
+```ts
+import init, { thumbnailPng } from "@streamthumb/wasm";
+
+const packageModule = import.meta.resolve("@streamthumb/wasm");
+const wasm = await Deno.readFile(
+  new URL("streamthumb_wasm_bg.wasm", packageModule),
+);
+await init({ module_or_path: wasm });
+```
+
+The filesystem call belongs to the consumer; the package itself does not
+import Node.js or Deno APIs.
+
 The API has no dependency on DOM, Canvas, filesystem, threads, `SharedArrayBuffer`, or Node-specific APIs. Passing and returning byte arrays currently copies them across the JavaScript/WebAssembly boundary.

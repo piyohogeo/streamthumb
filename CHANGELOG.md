@@ -18,3 +18,5 @@ project follows Semantic Versioning.
   validated through a pinned TypeScript and esbuild consumer build.
 - A pinned release-candidate workflow that records and verifies the source
   revision, package size, and SHA-256 checksum before any release action.
+- Installed-tarball consumer tests for Node.js and Deno, including bare package
+  resolution, explicit WebAssembly initialization, and PNG generation.

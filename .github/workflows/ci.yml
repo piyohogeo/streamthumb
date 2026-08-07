@@ -45,6 +45,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
+      - uses: denoland/setup-deno@v2.0.5
+        with:
+          deno-version: v2.9.5
       - uses: browser-actions/setup-chrome@v2
         id: package-chrome
       - run: node scripts/build-npm-package.mjs
@@ -52,6 +55,8 @@ jobs:
       - run: mkdir -p target/npm-artifacts && npm pack ./target/npm-package --pack-destination target/npm-artifacts
       - name: Test TypeScript package consumer in Chrome
         run: node scripts/test-npm-package-browser.mjs target/npm-artifacts/*.tgz '${{ steps.package-chrome.outputs.chrome-path }}'
+      - name: Test package consumers in Node.js and Deno
+        run: node scripts/test-npm-package-runtimes.mjs target/npm-artifacts/*.tgz
       - uses: actions/upload-artifact@v7
         with:
           name: npm-package

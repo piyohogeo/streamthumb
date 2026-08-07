@@ -1214,3 +1214,12 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. The release manifest records package identity, source revision, exact tool versions, tarball byte size, and SHA-256. A conventional `.sha256` file is generated alongside it.
 5. Manifest verification recomputes the hash and size, checks the source revision and pinned tools, and rejects unexpected files in the release-candidate artifact directory.
 6. The release-candidate artifact contains exactly the tarball, JSON manifest, and checksum file. It is retained for 30 days for independent inspection.
+
+### Phase 20 decisions
+
+1. Node.js and Deno compatibility is tested from an installed npm tarball, not from the generated package directory or Rust crate.
+2. Both runtimes resolve the public `@streamthumb/wasm` entry point, derive the adjacent WebAssembly URL, read the bytes with consumer-owned filesystem APIs, and pass those bytes to `init`.
+3. Runtime-specific filesystem APIs remain outside the package. Browser consumers retain automatic URL fetching, while filesystem consumers control byte loading explicitly.
+4. Node.js runs the JavaScript consumer under the Node 24 CI environment. Deno 2.9.5 runs the TypeScript consumer in manual node_modules mode with read permission restricted to the generated consumer directory.
+5. Deno is installed with the pinned official `denoland/setup-deno` 2.0.5 action. The Deno consumer also validates the package's public TypeScript declarations during execution.
+6. Both consumers verify version export, output dimensions, PNG MIME type, and PNG signature. Cloudflare runtime validation and npm publication remain excluded.
