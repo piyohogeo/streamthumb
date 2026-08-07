@@ -114,6 +114,7 @@ contract](docs/WASM_API.md) and the examples for [browsers](examples/browser),
 Workers](examples/cloudflare-worker).
 
 Dedicated browser workers can instead call
+`planThumbnailPngFromSeekable(file.size, readAt, options, delivery)` before
 `thumbnailPngFromSeekable(file.size, readAt, options)` or
 `thumbnailPngFromSeekableToChunks(file.size, readAt, onChunk, options)`. A
 synchronous `readAt` backed by `FileReaderSync` and `Blob.slice()` avoids

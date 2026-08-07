@@ -43,6 +43,7 @@ for (const publicExport of [
   "function streamthumbVersion(): string;",
   "function wasmMemoryBytes(): number;",
   "function planThumbnailPng(",
+  "function planThumbnailPngFromSeekable(",
   'type OutputDelivery = "buffered" | "chunks";',
   "withinMemoryLimit: boolean;",
   "This result owns no WebAssembly allocation",

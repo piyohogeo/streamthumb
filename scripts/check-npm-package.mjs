@@ -144,6 +144,9 @@ if ((declarations.match(/export function thumbnailPng\(/g) ?? []).length !== 1) 
 if ((declarations.match(/export function planThumbnailPng\(/g) ?? []).length !== 1) {
   throw new Error("TypeScript declarations must export exactly one planThumbnailPng signature.");
 }
+if ((declarations.match(/export function planThumbnailPngFromSeekable\(/g) ?? []).length !== 1) {
+  throw new Error("TypeScript declarations must export exactly one planThumbnailPngFromSeekable signature.");
+}
 if ((declarations.match(/export function thumbnailPngToChunks\(/g) ?? []).length !== 1) {
   throw new Error("TypeScript declarations must export exactly one thumbnailPngToChunks signature.");
 }

@@ -1,4 +1,5 @@
 import init, {
+  planThumbnailPngFromSeekable,
   thumbnailPngFromSeekable,
   thumbnailPngFromSeekableToChunks,
 } from "@streamthumb/wasm";
@@ -22,6 +23,7 @@ self.onmessage = async ({ data: file }) => {
       png: { color: "auto", compression: "fast", filter: "adaptive" },
     };
 
+    const plan = planThumbnailPngFromSeekable(file.size, readAt, options);
     const buffered = thumbnailPngFromSeekable(file.size, readAt, options);
     const bytes = buffered.bytes;
     const chunks = [];
@@ -41,6 +43,9 @@ self.onmessage = async ({ data: file }) => {
       width: buffered.width,
       height: buffered.height,
       format: buffered.format,
+      plannedWidth: plan.output.width,
+      plannedHeight: plan.output.height,
+      withinMemoryLimit: plan.withinMemoryLimit,
       chunkCount: chunked.chunkCount,
     };
     buffered.free();

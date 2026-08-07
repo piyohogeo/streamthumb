@@ -22,6 +22,8 @@ project follows Semantic Versioning.
   failure, multi-chunk, and performance evidence for provisional API adoption.
 - `thumbnailPngFromSeekable` and `thumbnailPngFromSeekableToChunks` WebAssembly
   APIs for synchronous bounded range reads in dedicated browser workers.
+- A `planThumbnailPngFromSeekable` WebAssembly API for header-only planning
+  through the same bounded synchronous range-reader contract.
 
 ### Changed
 

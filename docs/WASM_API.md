@@ -9,6 +9,7 @@ Import the default initializer and call it once before using the named exports:
 ```js
 import init, {
   planThumbnailPng,
+  planThumbnailPngFromSeekable,
   thumbnailPng,
   thumbnailPngFromSeekable,
   thumbnailPngFromSeekableToChunks,
@@ -51,6 +52,13 @@ function thumbnailPngToChunks(
 
 type SeekableReadAt = (offset: number, length: number) => Uint8Array;
 
+function planThumbnailPngFromSeekable(
+  inputLength: number,
+  readAt: SeekableReadAt,
+  options?: ThumbnailOptions | null,
+  delivery?: OutputDelivery | null,
+): ThumbnailPlan;
+
 function thumbnailPngFromSeekable(
   inputLength: number,
   readAt: SeekableReadAt,
@@ -86,11 +94,15 @@ The package itself remains independent of DOM and filesystem types because it
 accepts only the numeric length and callback. Node.js and Deno callers may
 provide an equivalent synchronous range reader.
 
-`planThumbnailPng` validates PNG header metadata, options, and every input and
-output resource limit without decoding image pixels. It uses the same Rust
-geometry and memory planner as execution. The default `"buffered"` delivery
-matches `thumbnailPng`; `"chunks"` matches `thumbnailPngToChunks` and includes
+`planThumbnailPng` and `planThumbnailPngFromSeekable` validate PNG header
+metadata, options, and every input and output resource limit without decoding
+image pixels. They use the same Rust geometry and memory planner as execution.
+The default `"buffered"` delivery matches the corresponding buffered execution
+function; `"chunks"` matches the corresponding chunked function and includes
 its 64 KiB adapter buffer. Chunk delivery supports only PNG and JPEG output.
+The seekable planner reads only the ranges required for header inspection and
+otherwise follows the same `inputLength` and `readAt` contract as seekable
+execution.
 
 The planning call does not enforce only the final `maxMemoryBytes` comparison.
 Instead, it returns the required conservative total, configured limit, and a
@@ -189,7 +201,7 @@ fixed Huffman tables. Width and height must each be at most 65,535 pixels.
 
 ## Result
 
-`planThumbnailPng` returns a plain JavaScript `ThumbnailPlan` object:
+Both planning functions return a plain JavaScript `ThumbnailPlan` object:
 
 ```ts
 interface ThumbnailPlan {

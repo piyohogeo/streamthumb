@@ -1,4 +1,5 @@
 import init, {
+  planThumbnailPngFromSeekable,
   streamthumbVersion,
   thumbnailPng,
   thumbnailPngFromSeekable,
@@ -78,6 +79,7 @@ void invalidOutput;
 void invalidWidth;
 void invalidPngColor;
 void jpegOutput;
+void planThumbnailPngFromSeekable;
 void thumbnailPngFromSeekable;
 void thumbnailPngFromSeekableToChunks;
 const typedReadAt: SeekableReadAt = (_offset, length) => new Uint8Array(length);
@@ -86,7 +88,15 @@ void typedReadAt;
 function runSeekableWorker(file: Blob): Promise<{
   bytes: Uint8Array;
   chunkBytes: Uint8Array;
-  metadata: { width: number; height: number; format: string; chunkCount: number };
+  metadata: {
+    width: number;
+    height: number;
+    format: string;
+    plannedWidth: number;
+    plannedHeight: number;
+    withinMemoryLimit: boolean;
+    chunkCount: number;
+  };
 }> {
   return new Promise((resolve, reject) => {
     const worker = new Worker("/seekable-worker.js", { type: "module" });
@@ -141,6 +151,9 @@ try {
   if (
     seekable.metadata.width !== 32
     || seekable.metadata.height !== 32
+    || seekable.metadata.plannedWidth !== 32
+    || seekable.metadata.plannedHeight !== 32
+    || !seekable.metadata.withinMemoryLimit
     || seekable.metadata.format !== "png"
     || seekable.metadata.chunkCount < 1
     || !equalBytes(seekable.bytes, bytes)

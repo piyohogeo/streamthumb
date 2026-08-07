@@ -10,8 +10,8 @@ use js_sys::{Function, Object, Reflect, Uint8Array};
 use streamthumb_core::{Filter, Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
     JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngInputColorType,
-    PngOptions, PngThumbnailPlan, ThumbnailOutput, preflight_thumbnail_png,
-    preflight_thumbnail_png_to_writer_with_buffer,
+    PngOptions, PngThumbnailPlan, ThumbnailOutput, preflight_thumbnail_png_from_reader,
+    preflight_thumbnail_png_from_reader_to_writer_with_buffer,
     thumbnail_jpeg_from_reader_to_writer_with_options_and_buffer, thumbnail_png_from_reader,
     thumbnail_png_from_reader_to_writer_with_encoder_options_and_buffer,
     thumbnail_png_from_reader_with_encoder_options, thumbnail_png_from_reader_with_jpeg_options,
@@ -123,6 +123,14 @@ export interface ThumbnailPlan {
 /** Inspects and plans a thumbnail without decoding image pixels. */
 export function planThumbnailPng(
     input: Uint8Array,
+    options?: ThumbnailOptions | null,
+    delivery?: OutputDelivery | null,
+): ThumbnailPlan;
+
+/** Inspects and plans a thumbnail through bounded synchronous range reads. */
+export function planThumbnailPngFromSeekable(
+    inputLength: number,
+    readAt: SeekableReadAt,
     options?: ThumbnailOptions | null,
     delivery?: OutputDelivery | null,
 ): ThumbnailPlan;
@@ -332,6 +340,22 @@ fn create_thumbnail_from_input(
     }
 }
 
+#[inline(never)]
+fn plan_thumbnail_from_input(
+    reader: WasmInput<'_>,
+    options: &ThumbnailOptions,
+    delivery: OutputDelivery,
+) -> streamthumb_png::Result<PngThumbnailPlan> {
+    match delivery {
+        OutputDelivery::Buffered => preflight_thumbnail_png_from_reader(reader, options),
+        OutputDelivery::Chunks => preflight_thumbnail_png_from_reader_to_writer_with_buffer(
+            reader,
+            options,
+            OUTPUT_CHUNK_BYTES,
+        ),
+    }
+}
+
 /// Inspects and plans a thumbnail without decoding image pixels.
 #[wasm_bindgen(js_name = planThumbnailPng, skip_typescript)]
 pub fn plan_thumbnail_png(
@@ -340,14 +364,41 @@ pub fn plan_thumbnail_png(
     delivery: &JsValue,
 ) -> Result<JsValue, JsError> {
     let (options, _, _) = parse_options(options)?;
-    let plan = match parse_output_delivery(delivery)? {
-        OutputDelivery::Buffered => preflight_thumbnail_png(input, &options),
-        OutputDelivery::Chunks => {
-            preflight_thumbnail_png_to_writer_with_buffer(input, &options, OUTPUT_CHUNK_BYTES)
-        }
-    }
-    .map_err(|error| JsError::new(&error.to_string()))?;
+    let delivery = parse_output_delivery(delivery)?;
+    let reader = WasmInput::Slice(Cursor::new(input));
+    let plan = plan_thumbnail_from_input(reader, &options, delivery)
+        .map_err(|error| JsError::new(&error.to_string()))?;
     thumbnail_plan_object(plan)
+}
+
+/// Inspects and plans a thumbnail through synchronous encoded-input range reads.
+#[wasm_bindgen(js_name = planThumbnailPngFromSeekable, skip_typescript)]
+pub fn plan_thumbnail_png_from_seekable(
+    input_length: f64,
+    read_at: &Function,
+    options: &JsValue,
+    delivery: &JsValue,
+) -> Result<JsValue, JsValue> {
+    let (options, _, _) = parse_options(options).map_err(JsValue::from)?;
+    let input_length = required_safe_u64(input_length, "inputLength").map_err(JsValue::from)?;
+    let callback_error = Rc::new(RefCell::new(None));
+    let delivery = parse_output_delivery(delivery).map_err(JsValue::from)?;
+    let reader = WasmInput::Seekable(JsSeekableReader::new(
+        input_length,
+        read_at.clone(),
+        Rc::clone(&callback_error),
+    ));
+    let plan = plan_thumbnail_from_input(reader, &options, delivery);
+    let plan = match plan {
+        Ok(plan) => plan,
+        Err(error) => {
+            if let Some(callback_error) = callback_error.borrow_mut().take() {
+                return Err(callback_error);
+            }
+            return Err(JsError::new(&error.to_string()).into());
+        }
+    };
+    thumbnail_plan_object(plan).map_err(JsValue::from)
 }
 
 /// Creates a bounded PNG, JPEG, or RGBA thumbnail from encoded PNG bytes.
@@ -1417,6 +1468,73 @@ mod browser_tests {
             number_property(&output, "height"),
             f64::from(result.height())
         );
+    }
+
+    #[wasm_bindgen_test]
+    fn seekable_planning_matches_slice_planning() {
+        for delivery in ["buffered", "chunks"] {
+            let options = options_with("maxWidth", &JsValue::from_f64(8.0));
+            let delivery = JsValue::from_str(delivery);
+            let expected = plan_thumbnail_png(PNG_INPUT, options.as_ref(), &delivery)
+                .expect("slice planning must succeed");
+            let (read_at, stats) = blob_read_at(PNG_INPUT);
+            let actual = plan_thumbnail_png_from_seekable(
+                PNG_INPUT.len() as f64,
+                &read_at,
+                options.as_ref(),
+                &delivery,
+            )
+            .expect("seekable planning must succeed");
+
+            for name in ["input", "output", "memory"] {
+                let expected = js_sys::JSON::stringify(&property(&expected, name)).unwrap();
+                let actual = js_sys::JSON::stringify(&property(&actual, name)).unwrap();
+                assert_eq!(actual, expected);
+            }
+            assert_eq!(
+                number_property(&actual, "configuredMaxMemoryBytes"),
+                number_property(&expected, "configuredMaxMemoryBytes"),
+            );
+            assert_eq!(
+                bool_property(&actual, "withinMemoryLimit"),
+                bool_property(&expected, "withinMemoryLimit"),
+            );
+            assert!(number_property(stats.as_ref(), "calls") > 0.0);
+            assert!(number_property(stats.as_ref(), "largest") <= 8.0 * 1024.0);
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn seekable_planning_validates_limits_and_preserves_callback_exceptions() {
+        let (read_at, stats) = blob_read_at(PNG_INPUT);
+        let options = options_with(
+            "maxInputBytes",
+            &JsValue::from_f64((PNG_INPUT.len() - 1) as f64),
+        );
+        assert!(
+            plan_thumbnail_png_from_seekable(
+                PNG_INPUT.len() as f64,
+                &read_at,
+                options.as_ref(),
+                &JsValue::UNDEFINED,
+            )
+            .is_err()
+        );
+        assert_eq!(number_property(stats.as_ref(), "calls"), 0.0);
+
+        let factory = Function::new_no_args(
+            "const marker = { kind: 'plan-input' }; return { marker, readAt() { throw marker; } };",
+        );
+        let harness = factory
+            .call0(&JsValue::UNDEFINED)
+            .unwrap()
+            .unchecked_into::<Object>();
+        let marker = property(harness.as_ref(), "marker");
+        let read_at = property(harness.as_ref(), "readAt").unchecked_into::<Function>();
+        let error =
+            plan_thumbnail_png_from_seekable(16.0, &read_at, &JsValue::NULL, &JsValue::UNDEFINED)
+                .expect_err("input callback exception must abort planning");
+        assert!(Object::is(&error, &marker));
     }
 
     #[wasm_bindgen_test]

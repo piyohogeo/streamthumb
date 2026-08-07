@@ -12,6 +12,7 @@ npm install @streamthumb/wasm
 
 ```js
 import init, {
+  planThumbnailPngFromSeekable,
   thumbnailPng,
   thumbnailPngFromSeekable,
   thumbnailPngToChunks,
@@ -73,6 +74,11 @@ const reader = new FileReaderSync();
 const readAt = (offset, length) => new Uint8Array(
   reader.readAsArrayBuffer(file.slice(offset, offset + length)),
 );
+const plan = planThumbnailPngFromSeekable(file.size, readAt, {
+  maxWidth: 512,
+  maxHeight: 512,
+  output: "png",
+});
 const result = thumbnailPngFromSeekable(file.size, readAt, {
   maxWidth: 512,
   maxHeight: 512,
@@ -81,8 +87,10 @@ const result = thumbnailPngFromSeekable(file.size, readAt, {
 ```
 
 The callback is synchronous, must return exactly the requested bytes, and
-cannot return a Promise. `thumbnailPngFromSeekableToChunks` combines this input
-model with bounded encoded-output chunks. `FileReaderSync` is worker-only.
+cannot return a Promise. `planThumbnailPngFromSeekable` inspects the PNG header
+through the same range-reader contract without decoding pixels.
+`thumbnailPngFromSeekableToChunks` combines this input model with bounded
+encoded-output chunks. `FileReaderSync` is worker-only.
 
 `output: "png"` returns encoded PNG bytes with MIME type `image/png`.
 `output: "jpeg"` returns baseline JPEG bytes with MIME type `image/jpeg`; a

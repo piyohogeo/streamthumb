@@ -198,6 +198,19 @@ pub fn preflight_thumbnail_png(
     preflight_thumbnail_png_with_storage(&mut input, options, EncodedOutputStorage::Buffered)
 }
 
+/// Inspects and plans buffered PNG thumbnail processing from a seekable reader.
+///
+/// The reader is consumed from its current position and must support rewinding to
+/// that position. Encoded input bytes are not retained by this function.
+#[doc(hidden)]
+pub fn preflight_thumbnail_png_from_reader<R: Read + Seek>(
+    reader: R,
+    options: &ThumbnailOptions,
+) -> Result<PngThumbnailPlan> {
+    let mut input = buffered_input(reader, options)?;
+    preflight_thumbnail_png_with_storage(&mut input, options, EncodedOutputStorage::Buffered)
+}
+
 /// Plans PNG or JPEG delivery to a caller-owned writer with an adapter buffer.
 ///
 /// Raw RGBA output has no encoded writer path and is rejected.
@@ -213,6 +226,26 @@ pub fn preflight_thumbnail_png_to_writer_with_buffer(
         ));
     }
     let mut input = SeekableInput::new(Cursor::new(input), options)?;
+    preflight_thumbnail_png_with_storage(
+        &mut input,
+        options,
+        EncodedOutputStorage::Writer(writer_buffer_bytes),
+    )
+}
+
+/// Plans PNG or JPEG writer delivery from a seekable reader.
+#[doc(hidden)]
+pub fn preflight_thumbnail_png_from_reader_to_writer_with_buffer<R: Read + Seek>(
+    reader: R,
+    options: &ThumbnailOptions,
+    writer_buffer_bytes: usize,
+) -> Result<PngThumbnailPlan> {
+    if options.output == OutputFormat::Rgba {
+        return Err(Error::InvalidOutputDelivery(
+            "writer delivery requires PNG or JPEG output",
+        ));
+    }
+    let mut input = buffered_input(reader, options)?;
     preflight_thumbnail_png_with_storage(
         &mut input,
         options,
