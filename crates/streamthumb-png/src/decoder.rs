@@ -96,7 +96,6 @@ where
             detail: "APNG is not supported",
         });
     }
-    reject_separate_transparency(source_color, reader.info().trns.is_some())?;
     let (output_color, output_depth) = reader.output_color_type();
     validate_source_color_depth(output_color, output_depth)?;
     let source_format = SourceFormat::from_info(reader.info())?;
@@ -277,7 +276,6 @@ fn thumbnail_png_adam7_rgba_planned(
             detail: "APNG is not supported",
         });
     }
-    reject_separate_transparency(source_color, reader.info().trns.is_some())?;
     let (output_color, output_depth) = reader.output_color_type();
     validate_source_color_depth(output_color, output_depth)?;
     let source_format = SourceFormat::from_info(reader.info())?;
@@ -528,16 +526,6 @@ fn reject_interlacing(interlaced: bool) -> Result<()> {
     Ok(())
 }
 
-fn reject_separate_transparency(color: ColorType, has_transparency: bool) -> Result<()> {
-    if has_transparency && color == ColorType::Rgb {
-        return Err(Error::Unsupported {
-            feature: UnsupportedFeature::ColorType,
-            detail: "RGB tRNS transparency is not supported; use RGBA",
-        });
-    }
-    Ok(())
-}
-
 fn planning_bytes_per_pixel(color: ColorType, depth: BitDepth) -> Result<u8> {
     if color == ColorType::Indexed
         || (color == ColorType::Grayscale
@@ -592,6 +580,7 @@ enum SourceFormat {
         color: ColorType,
         depth: BitDepth,
         bytes: usize,
+        transparent_rgb: Option<[u16; 3]>,
     },
     Indexed {
         colors: Vec<[u8; 4]>,
@@ -633,6 +622,7 @@ impl SourceFormat {
                 color: info.color_type,
                 depth: info.bit_depth,
                 bytes: usize::from(direct_bytes_per_pixel(info.color_type, info.bit_depth)?),
+                transparent_rgb: parse_rgb_transparency(info)?,
             });
         }
 
@@ -723,6 +713,7 @@ impl SourceFormat {
                 color,
                 depth,
                 bytes,
+                transparent_rgb,
             } => {
                 let start =
                     index
@@ -739,7 +730,7 @@ impl SourceFormat {
                 let sample = source.get(start..end).ok_or_else(|| {
                     Error::DecodeFailure("decoded PNG row ended within a sample".to_owned())
                 })?;
-                normalize_direct_pixel(sample, *color, *depth)
+                normalize_direct_pixel(sample, *color, *depth, *transparent_rgb)
             }
             Self::Indexed { colors, bits } => {
                 let bit_offset =
@@ -762,6 +753,40 @@ impl SourceFormat {
                 })
             }
         }
+    }
+}
+
+fn parse_rgb_transparency(info: &png::Info<'_>) -> Result<Option<[u16; 3]>> {
+    if info.color_type != ColorType::Rgb {
+        return Ok(None);
+    }
+    let Some(bytes) = info.trns.as_deref() else {
+        return Ok(None);
+    };
+    match info.bit_depth {
+        BitDepth::Eight if bytes.len() == 3 => Ok(Some([
+            u16::from(bytes[0]),
+            u16::from(bytes[1]),
+            u16::from(bytes[2]),
+        ])),
+        BitDepth::Sixteen if bytes.len() == 6 => Ok(Some([
+            u16::from_be_bytes([bytes[0], bytes[1]]),
+            u16::from_be_bytes([bytes[2], bytes[3]]),
+            u16::from_be_bytes([bytes[4], bytes[5]]),
+        ])),
+        BitDepth::Eight | BitDepth::Sixteen => Err(Error::DecodeFailure(format!(
+            "normalized RGB tRNS has {} bytes; expected {}",
+            bytes.len(),
+            if info.bit_depth == BitDepth::Sixteen {
+                6
+            } else {
+                3
+            }
+        ))),
+        BitDepth::One | BitDepth::Two | BitDepth::Four => Err(Error::Unsupported {
+            feature: UnsupportedFeature::BitDepth,
+            detail: "sub-byte RGB samples are not supported",
+        }),
     }
 }
 
@@ -894,7 +919,12 @@ fn normalize_row(source: &[u8], format: &SourceFormat, destination: &mut [u8]) -
     Ok(())
 }
 
-fn normalize_direct_pixel(source: &[u8], color: ColorType, depth: BitDepth) -> Result<[u8; 4]> {
+fn normalize_direct_pixel(
+    source: &[u8],
+    color: ColorType,
+    depth: BitDepth,
+    transparent_rgb: Option<[u16; 3]>,
+) -> Result<[u8; 4]> {
     let channels = usize::from(direct_channel_count(color)?);
     let sample_bytes = match depth {
         BitDepth::Eight => 1,
@@ -919,7 +949,7 @@ fn normalize_direct_pixel(source: &[u8], color: ColorType, depth: BitDepth) -> R
         )));
     }
 
-    let channel = |index: usize| -> Result<u8> {
+    let raw_channel = |index: usize| -> Result<u16> {
         let start =
             index
                 .checked_mul(sample_bytes)
@@ -927,7 +957,7 @@ fn normalize_direct_pixel(source: &[u8], color: ColorType, depth: BitDepth) -> R
                     operation: "direct channel offset",
                 })?;
         match depth {
-            BitDepth::Eight => source.get(start).copied().ok_or_else(|| {
+            BitDepth::Eight => source.get(start).copied().map(u16::from).ok_or_else(|| {
                 Error::DecodeFailure("decoded PNG sample ended within a channel".to_owned())
             }),
             BitDepth::Sixteen => {
@@ -939,14 +969,7 @@ fn normalize_direct_pixel(source: &[u8], color: ColorType, depth: BitDepth) -> R
                 let bytes = source.get(start..end).ok_or_else(|| {
                     Error::DecodeFailure("decoded PNG sample ended within a channel".to_owned())
                 })?;
-                let value = u16::from_be_bytes([bytes[0], bytes[1]]);
-                let rounded = (u32::from(value) * 255 + 32_767) / 65_535;
-                u8::try_from(rounded).map_err(|_| {
-                    streamthumb_core::Error::IntegerOverflow {
-                        operation: "16-bit sample normalization",
-                    }
-                    .into()
-                })
+                Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
             }
             BitDepth::One | BitDepth::Two | BitDepth::Four => Err(Error::Unsupported {
                 feature: UnsupportedFeature::BitDepth,
@@ -954,18 +977,54 @@ fn normalize_direct_pixel(source: &[u8], color: ColorType, depth: BitDepth) -> R
             }),
         }
     };
+    let normalize = |value: u16| -> Result<u8> {
+        let scaled = match depth {
+            BitDepth::Eight => u32::from(value),
+            BitDepth::Sixteen => (u32::from(value) * 255 + 32_767) / 65_535,
+            BitDepth::One | BitDepth::Two | BitDepth::Four => {
+                return Err(Error::Unsupported {
+                    feature: UnsupportedFeature::BitDepth,
+                    detail: "sub-byte direct samples are not supported",
+                });
+            }
+        };
+        u8::try_from(scaled).map_err(|_| {
+            streamthumb_core::Error::IntegerOverflow {
+                operation: "direct sample normalization",
+            }
+            .into()
+        })
+    };
 
     match color {
         ColorType::Grayscale => {
-            let gray = channel(0)?;
+            let gray = normalize(raw_channel(0)?)?;
             Ok([gray, gray, gray, u8::MAX])
         }
         ColorType::GrayscaleAlpha => {
-            let gray = channel(0)?;
-            Ok([gray, gray, gray, channel(1)?])
+            let gray = normalize(raw_channel(0)?)?;
+            Ok([gray, gray, gray, normalize(raw_channel(1)?)?])
         }
-        ColorType::Rgb => Ok([channel(0)?, channel(1)?, channel(2)?, u8::MAX]),
-        ColorType::Rgba => Ok([channel(0)?, channel(1)?, channel(2)?, channel(3)?]),
+        ColorType::Rgb => {
+            let raw = [raw_channel(0)?, raw_channel(1)?, raw_channel(2)?];
+            let alpha = if transparent_rgb == Some(raw) {
+                0
+            } else {
+                u8::MAX
+            };
+            Ok([
+                normalize(raw[0])?,
+                normalize(raw[1])?,
+                normalize(raw[2])?,
+                alpha,
+            ])
+        }
+        ColorType::Rgba => Ok([
+            normalize(raw_channel(0)?)?,
+            normalize(raw_channel(1)?)?,
+            normalize(raw_channel(2)?)?,
+            normalize(raw_channel(3)?)?,
+        ]),
         ColorType::Indexed => Err(Error::DecodeFailure(
             "palette sample reached the direct normalizer".to_owned(),
         )),
@@ -1181,6 +1240,17 @@ mod tests {
         depth: BitDepth,
         pixels: &[u8],
     ) -> Vec<u8> {
+        encode_adam7_direct_png_with_trns(width, height, color, depth, pixels, &[])
+    }
+
+    fn encode_adam7_direct_png_with_trns(
+        width: u32,
+        height: u32,
+        color: ColorType,
+        depth: BitDepth,
+        pixels: &[u8],
+        transparency: &[u8],
+    ) -> Vec<u8> {
         let channels = match color {
             ColorType::Grayscale => 1_usize,
             ColorType::GrayscaleAlpha => 2_usize,
@@ -1237,6 +1307,9 @@ mod tests {
         });
         ihdr.extend_from_slice(&[0, 0, 1]);
         append_chunk(&mut encoded, *b"IHDR", &ihdr);
+        if !transparency.is_empty() {
+            append_chunk(&mut encoded, *b"tRNS", transparency);
+        }
         append_chunk(&mut encoded, *b"IDAT", &compressed);
         append_chunk(&mut encoded, *b"IEND", &[]);
         encoded
@@ -1331,6 +1404,77 @@ mod tests {
         assert_eq!(rows[0], (0, vec![1, 2, 3, 255, 4, 5, 6, 255]));
         assert_eq!(rows[1], (1, vec![7, 8, 9, 255, 10, 11, 12, 255]));
         assert_eq!(rows[2], (2, vec![13, 14, 15, 255, 16, 17, 18, 255]));
+    }
+
+    #[test]
+    fn applies_eight_bit_rgb_transparency() {
+        let mut encoded = Vec::new();
+        let mut encoder = png::Encoder::new(&mut encoded, 2, 1);
+        encoder.set_color(ColorType::Rgb);
+        encoder.set_depth(BitDepth::Eight);
+        encoder.set_trns(vec![0, 10, 0, 20, 0, 30]);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[10, 20, 30, 10, 20, 31]).unwrap();
+        writer.finish().unwrap();
+        let mut rgba = Vec::new();
+
+        decode_png_rows(&encoded, &default_options(), |row| {
+            rgba.extend_from_slice(row.pixels);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(rgba, [10, 20, 30, 0, 10, 20, 31, 255]);
+    }
+
+    #[test]
+    fn compares_sixteen_bit_rgb_transparency_before_normalization() {
+        let transparent = [0x01, 0x00, 0x02, 0x00, 0x03, 0x00];
+        let pixels = [
+            0x01, 0x00, 0x02, 0x00, 0x03, 0x00, // transparent
+            0x01, 0x01, 0x02, 0x00, 0x03, 0x00, // same RGBA8 color, distinct source red
+        ];
+        let mut encoded = Vec::new();
+        let mut encoder = png::Encoder::new(&mut encoded, 2, 1);
+        encoder.set_color(ColorType::Rgb);
+        encoder.set_depth(BitDepth::Sixteen);
+        encoder.set_trns(transparent.to_vec());
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&pixels).unwrap();
+        writer.finish().unwrap();
+        let mut rgba = Vec::new();
+
+        decode_png_rows(&encoded, &default_options(), |row| {
+            rgba.extend_from_slice(row.pixels);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(rgba, [1, 2, 3, 0, 1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn rejects_invalid_rgb_transparency_length_before_rows() {
+        for transparency in [vec![0; 5], vec![0; 7]] {
+            let mut encoded = Vec::new();
+            let mut encoder = png::Encoder::new(&mut encoded, 1, 1);
+            encoder.set_color(ColorType::Rgb);
+            encoder.set_depth(BitDepth::Eight);
+            encoder.set_trns(transparency);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[1, 2, 3]).unwrap();
+            writer.finish().unwrap();
+            let mut callbacks = 0;
+
+            assert!(
+                decode_png_rows(&encoded, &default_options(), |_| {
+                    callbacks += 1;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert_eq!(callbacks, 0);
+        }
     }
 
     #[test]
@@ -1576,6 +1720,63 @@ mod tests {
             assert_eq!(
                 thumbnail_png_rgba(&adam7, &options).unwrap(),
                 thumbnail_png_rgba(&sequential, &options).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn adam7_rgb_transparency_matches_non_interlaced_for_both_depths() {
+        for depth in [BitDepth::Eight, BitDepth::Sixteen] {
+            let width = 11_u32;
+            let height = 9_u32;
+            let modulus = if depth == BitDepth::Eight {
+                256
+            } else {
+                65_536
+            };
+            let mut pixels = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    for channel in 0..3_u32 {
+                        let value =
+                            u16::try_from((17 + x * 7_919 + y * 4_099 + channel * 41) % modulus)
+                                .unwrap();
+                        if depth == BitDepth::Eight {
+                            pixels.push(u8::try_from(value).unwrap());
+                        } else {
+                            pixels.extend_from_slice(&value.to_be_bytes());
+                        }
+                    }
+                }
+            }
+            let transparency = [17_u16, 58, 99]
+                .into_iter()
+                .flat_map(u16::to_be_bytes)
+                .collect::<Vec<_>>();
+            let mut sequential = Vec::new();
+            let mut encoder = png::Encoder::new(&mut sequential, width, height);
+            encoder.set_color(ColorType::Rgb);
+            encoder.set_depth(depth);
+            encoder.set_trns(transparency.clone());
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&pixels).unwrap();
+            writer.finish().unwrap();
+            let adam7 = encode_adam7_direct_png_with_trns(
+                width,
+                height,
+                ColorType::Rgb,
+                depth,
+                &pixels,
+                &transparency,
+            );
+            let mut options = default_options();
+            options.max_width = 5;
+            options.max_height = 4;
+
+            assert_eq!(
+                thumbnail_png_rgba(&adam7, &options).unwrap(),
+                thumbnail_png_rgba(&sequential, &options).unwrap(),
+                "RGB tRNS Adam7 mismatch at {depth:?}"
             );
         }
     }

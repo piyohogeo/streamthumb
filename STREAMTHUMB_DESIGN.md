@@ -1156,3 +1156,12 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 5. Packed grayscale memory planning conservatively reserves one source byte per pixel plus the existing RGBA normalization row. Eight- and sixteen-bit grayscale reserve one and two source bytes per pixel respectively.
 6. Tests cover exact 1-, 2-, and 4-bit scaling, row padding, 8- and 16-bit grayscale transparency, all grayscale depths in Adam7 order, malformed `tRNS` lengths, out-of-range transparent samples, and packed-row memory accounting.
 7. Low-bit grayscale and grayscale transparency flow through the existing Rust row callback, thumbnail, CLI, and WASM APIs. RGB `tRNS` and APNG remain unsupported.
+
+### Phase 13 decisions
+
+1. RGB `tRNS` transparency is supported for both 8- and 16-bit samples in non-interlaced and Adam7 input.
+2. The transparent RGB triplet is compared with the original source samples before 16-bit-to-8-bit normalization. Distinct 16-bit colors that round to the same RGBA8 color therefore retain distinct transparency behavior.
+3. The codec normalizes 8-bit RGB `tRNS` metadata from six encoded bytes to three bytes while retaining all six bytes for 16-bit input. Streamthumb validates the raw chunk length first and then parses either normalized representation explicitly.
+4. RGB transparency adds only three `u16` values to source-format state. Row buffers, sparse accumulators, output memory, and public options are unchanged.
+5. Tests cover exact 8-bit transparency, a 16-bit normalization-collision case, both depths in Adam7 order, and malformed five- and seven-byte `tRNS` chunks rejected before callbacks.
+6. With RGB transparency implemented, the supported static PNG contract covers every standard PNG color type and legal bit depth, including Adam7 and the applicable `tRNS` forms. APNG animation remains out of scope.
