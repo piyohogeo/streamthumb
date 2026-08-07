@@ -11,6 +11,7 @@ version 0.1.0 before publication.
 | Bounded non-interlaced RGB/RGBA thumbnailing | Complete | `streamthumb-png` row decoding and fused thumbnail tests cover RGB8 and RGBA8. |
 | No full-resolution source RGBA allocation | Complete | Non-interlaced processing retains decoder rows and output-sized accumulators; Adam7 uses output-sized sparse accumulators. Native RSS and WebAssembly linear-memory benchmarks exercise height-independent planning. |
 | Arbitrary-ratio area filtering | Complete | `streamthumb-core` differential tests compare integer streaming results with an independent full-frame floating-point reference using a one-channel-value tolerance. |
+| Centered cover cropping | Complete | Rust, CLI, and WebAssembly expose `contain` and `cover`. Exact fractional crop boundaries feed the ordered and Adam7 area paths without an intermediate frame; PNG, JPEG, and RGBA integration tests share the result. |
 | Premultiplied-alpha filtering | Complete | Transparent-edge and fully transparent pixel tests verify straight-alpha output without color halos. |
 | Malformed and oversized input rejection | Complete | Typed error tests cover truncation, malformed chunks, APNG, byte, dimension, pixel, output, decoder-memory, and working-memory limits. Fuzz targets cover rows, thumbnails, and the area downsampler. |
 | Configurable resource limits | Complete | Rust and WebAssembly APIs expose every required input, output, and working-memory limit. Defaults and documentation are checked together in CI. |
@@ -26,8 +27,9 @@ version 0.1.0 before publication.
 ## Support beyond the original MVP
 
 Version 0.1.0 also supports Adam7, every standard PNG color type and legal bit
-depth, applicable palette/grayscale/RGB `tRNS` transparency, raw RGBA output,
-strict TypeScript declarations, and reproducible release-candidate artifacts.
+depth, applicable palette/grayscale/RGB `tRNS` transparency, centered cover
+cropping, raw RGBA output, strict TypeScript declarations, and reproducible
+release-candidate artifacts.
 
 ## Streaming output extension status
 

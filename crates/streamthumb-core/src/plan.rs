@@ -1,6 +1,7 @@
 use crate::{
-    Dimensions, Error, LimitKind, MemoryEstimate, Result, ThumbnailOptions, contain_dimensions,
-    estimate_sparse_working_memory_for_output, estimate_working_memory_for_output,
+    Dimensions, Error, Fit, LimitKind, MemoryEstimate, Result, ThumbnailOptions,
+    contain_dimensions, cover_dimensions, estimate_sparse_working_memory_for_output,
+    estimate_working_memory_for_output,
 };
 
 /// Header-level information needed to plan processing before large allocations.
@@ -49,7 +50,12 @@ fn plan_thumbnail_with_layout(
     validate_input(input, options)?;
 
     let requested_bounds = Dimensions::new(options.max_width, options.max_height)?;
-    let output = contain_dimensions(input.dimensions, requested_bounds, options.allow_upscale)?;
+    let output = match options.fit {
+        Fit::Contain => {
+            contain_dimensions(input.dimensions, requested_bounds, options.allow_upscale)?
+        }
+        Fit::Cover => cover_dimensions(input.dimensions, requested_bounds, options.allow_upscale)?,
+    };
     validate_output(output, options)?;
 
     let memory = if sparse {
@@ -322,5 +328,18 @@ mod tests {
                 field: "limits.max_pixels"
             })
         );
+    }
+
+    #[test]
+    fn plans_cover_output_without_changing_the_source_allocation_shape() {
+        let options = ThumbnailOptions {
+            max_width: 320,
+            max_height: 180,
+            fit: Fit::Cover,
+            ..ThumbnailOptions::default()
+        };
+        let plan = plan_thumbnail(input(1_000, 1_000), &options).unwrap();
+        assert_eq!(plan.source, Dimensions::new(1_000, 1_000).unwrap());
+        assert_eq!(plan.output, Dimensions::new(320, 180).unwrap());
     }
 }

@@ -1,6 +1,6 @@
 use std::{env, error::Error, fmt, fs, path::PathBuf, process::ExitCode};
 
-use streamthumb_core::{OutputFormat, ThumbnailOptions};
+use streamthumb_core::{Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
     JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngOptions,
     ThumbnailOutput, thumbnail_png_with_encoder_options, thumbnail_png_with_jpeg_options,
@@ -78,6 +78,14 @@ impl Config {
                     options.max_height = parse_dimension(arguments.next(), "--max-height")?;
                 }
                 "--allow-upscale" => options.allow_upscale = true,
+                "--fit" => {
+                    let value = required_value(arguments.next(), "--fit")?;
+                    options.fit = match value.as_str() {
+                        "contain" => Fit::Contain,
+                        "cover" => Fit::Cover,
+                        _ => return Err(invalid_choice("--fit", &value)),
+                    };
+                }
                 "--format" => {
                     let value = required_value(arguments.next(), "--format")?;
                     options.output = match value.as_str() {
@@ -239,7 +247,7 @@ fn usage() -> CliError {
 }
 
 const fn usage_text() -> &'static str {
-    "usage: streamthumb <input.png> <output.png|output.jpg> [--format png|jpeg] [--max-width N] [--max-height N] [--allow-upscale] [--png-color MODE] [--png-compression LEVEL] [--png-filter FILTER] [--jpeg-quality 1..100] [--jpeg-background #rrggbb] [--jpeg-subsampling 420|422|444]"
+    "usage: streamthumb <input.png> <output.png|output.jpg> [--format png|jpeg] [--max-width N] [--max-height N] [--fit contain|cover] [--allow-upscale] [--png-color MODE] [--png-compression LEVEL] [--png-filter FILTER] [--jpeg-quality 1..100] [--jpeg-background #rrggbb] [--jpeg-subsampling 420|422|444]"
 }
 
 #[derive(Debug)]
@@ -295,6 +303,8 @@ mod tests {
                 "320",
                 "--max-height",
                 "200",
+                "--fit",
+                "cover",
                 "--allow-upscale",
             ]
             .map(str::to_owned),
@@ -305,6 +315,7 @@ mod tests {
         assert_eq!(config.output, PathBuf::from("output.png"));
         assert_eq!(config.options.max_width, 320);
         assert_eq!(config.options.max_height, 200);
+        assert_eq!(config.options.fit, Fit::Cover);
         assert!(config.options.allow_upscale);
         assert_eq!(config.options.output, OutputFormat::Png);
         assert_eq!(config.png_options, PngOptions::default());
@@ -391,5 +402,6 @@ mod tests {
             Config::parse(["in", "out", "--png-color", "indexed8"].map(str::to_owned)).is_err()
         );
         assert!(Config::parse(["in", "out", "--png-filter"].map(str::to_owned)).is_err());
+        assert!(Config::parse(["in.png", "out.png", "--fit", "crop"].map(str::to_owned)).is_err());
     }
 }

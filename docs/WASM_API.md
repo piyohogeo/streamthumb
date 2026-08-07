@@ -39,9 +39,9 @@ All numeric options must be non-negative JavaScript safe integers. Operational d
 | --- | ---: | --- |
 | `maxWidth` | `512` | Requested bounding-box width. |
 | `maxHeight` | `512` | Requested bounding-box height. |
-| `fit` | `"contain"` | Preserves aspect ratio inside the requested bounding box. This is the only supported fit mode. |
+| `fit` | `"contain"` | `"contain"` preserves the complete input inside the box. `"cover"` fills the box aspect ratio with a centered crop. |
 | `filter` | `"area"` | Uses the area resampling filter. This is the only supported filter. |
-| `allowUpscale` | `false` | When false, neither output dimension exceeds the corresponding input dimension. |
+| `allowUpscale` | `false` | When false, neither output dimension exceeds the corresponding input dimension. A cover box is reduced uniformly when filling it would require enlargement. |
 | `output` | `"png"` | Selects encoded `"png"`, encoded `"jpeg"`, or raw `"rgba"` output. |
 | `png` | RGBA8, balanced compression, default filter | Optional PNG-only encoder settings described below. Supplying this object with raw RGBA output is an error. |
 | `jpeg` | quality 85, white background, 4:2:0 | Optional JPEG-only encoder settings described below. Supplying this object with PNG or raw RGBA output is an error. |
@@ -55,6 +55,14 @@ All numeric options must be non-negative JavaScript safe integers. Operational d
 | `maxMemoryBytes` | `33,554,432` (32 MiB) | Maximum conservative working-memory estimate. It covers decoder storage, resize storage, one completed output row for encoded output or the complete frame for raw RGBA, codec state, a bounded JPEG MCU segment where applicable, and bounded encoded output. It excludes caller-owned input, JavaScript memory, WebAssembly runtime overhead, and allocator slack. |
 
 The requested bounding box and all applicable resource limits must pass. Setting a limit lower than the requested or calculated operation does not clamp the output; it rejects the operation.
+
+Cover cropping removes equal margins from opposite sides. Fractional source
+boundaries are preserved in the area weights, including half-pixel-centered
+regions, rather than rounded to an integer crop rectangle. Cropping is fused
+with row resampling and does not allocate an intermediate scaled or cropped
+frame. The output is exactly the requested box when downscaling is possible or
+`allowUpscale` is true. With upscaling disabled and a smaller input, the box is
+reduced before cropping.
 
 ### PNG encoder options
 

@@ -103,7 +103,7 @@ for (const license of ["LICENSE-MIT", "LICENSE-APACHE"]) {
 
 const declarationContract = [
   "export interface ThumbnailOptions",
-  'export type ThumbnailFit = "contain";',
+  'export type ThumbnailFit = "contain" | "cover";',
   'export type ThumbnailFilter = "area";',
   'export type ThumbnailOutputFormat = "png" | "jpeg" | "rgba";',
   'export type PngColorMode = "auto" | "rgba8" | "rgb8" | "grayscale-alpha8" | "grayscale8";',

@@ -3,10 +3,10 @@
 use std::hint::black_box;
 
 use libfuzzer_sys::fuzz_target;
-use streamthumb_core::{AreaDownsampler, Dimensions, SparseAreaDownsampler};
+use streamthumb_core::{AreaDownsampler, Dimensions, Fit, SparseAreaDownsampler};
 
 fuzz_target!(|data: &[u8]| {
-    if data.len() < 4 {
+    if data.len() < 5 {
         return;
     }
     let Ok(source) = Dimensions::new(u32::from(data[0] % 64) + 1, u32::from(data[1] % 64) + 1)
@@ -17,16 +17,21 @@ fuzz_target!(|data: &[u8]| {
     else {
         return;
     };
-    let Ok(mut downsampler) = AreaDownsampler::new(source, output) else {
+    let fit = if data[4] & 1 == 0 {
+        Fit::Contain
+    } else {
+        Fit::Cover
+    };
+    let Ok(mut downsampler) = AreaDownsampler::new_with_fit(source, output, fit) else {
         return;
     };
-    let Ok(mut sparse) = SparseAreaDownsampler::new(source, output) else {
+    let Ok(mut sparse) = SparseAreaDownsampler::new_with_fit(source, output, fit) else {
         return;
     };
 
     let row_len = source.width as usize * 4;
     let mut row = vec![0_u8; row_len];
-    let samples = &data[4..];
+    let samples = &data[5..];
     for y in 0..source.height {
         if !samples.is_empty() {
             for (index, value) in row.iter_mut().enumerate() {

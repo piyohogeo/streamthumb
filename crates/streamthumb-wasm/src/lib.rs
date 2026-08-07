@@ -15,7 +15,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(typescript_custom_section)]
 const THUMBNAIL_TYPES: &str = r#"
 /** Fit modes supported by the bounded thumbnail pipeline. */
-export type ThumbnailFit = "contain";
+export type ThumbnailFit = "contain" | "cover";
 
 /** Resize filters supported by the bounded thumbnail pipeline. */
 export type ThumbnailFilter = "area";
@@ -200,7 +200,8 @@ fn parse_options(value: &JsValue) -> Result<(ThumbnailOptions, PngOptions, JpegO
     if let Some(fit) = optional_string(value, "fit")? {
         options.fit = match fit.as_str() {
             "contain" => Fit::Contain,
-            _ => return Err(JsError::new("fit must be \"contain\"")),
+            "cover" => Fit::Cover,
+            _ => return Err(JsError::new("fit must be \"contain\" or \"cover\"")),
         };
     }
     if let Some(filter) = optional_string(value, "filter")? {
@@ -591,6 +592,25 @@ mod browser_tests {
     }
 
     #[wasm_bindgen_test]
+    fn creates_centered_cover_output() {
+        let options = Object::new();
+        for (name, value) in [
+            ("maxWidth", JsValue::from_f64(8.0)),
+            ("maxHeight", JsValue::from_f64(4.0)),
+            ("fit", JsValue::from_str("cover")),
+            ("output", JsValue::from_str("rgba")),
+        ] {
+            Reflect::set(options.as_ref(), &JsValue::from_str(name), &value)
+                .expect("the test options object must be writable");
+        }
+
+        let result = thumbnail_png(PNG_INPUT, options.as_ref()).expect("thumbnail must succeed");
+        assert_eq!(result.width(), 8);
+        assert_eq!(result.height(), 4);
+        assert_eq!(result.bytes().len(), 8 * 4 * 4);
+    }
+
+    #[wasm_bindgen_test]
     fn reports_resource_limit_errors() {
         let input_limit = options_with(
             "maxInputBytes",
@@ -610,7 +630,7 @@ mod browser_tests {
             ("maxInputPixels", JsValue::from_f64(-1.0)),
             ("maxOutputPixels", JsValue::from_str("many")),
             ("allowUpscale", JsValue::from_str("true")),
-            ("fit", JsValue::from_str("cover")),
+            ("fit", JsValue::from_str("crop")),
             ("filter", JsValue::from_str("nearest")),
             ("output", JsValue::from_str("webp")),
         ];

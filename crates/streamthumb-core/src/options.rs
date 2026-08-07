@@ -5,6 +5,8 @@ use crate::Limits;
 pub enum Fit {
     #[default]
     Contain,
+    /// Fills the requested aspect ratio and crops equal margins from opposite sides.
+    Cover,
 }
 
 /// The resampling filter used to create the thumbnail.

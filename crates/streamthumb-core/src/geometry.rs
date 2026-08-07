@@ -89,6 +89,60 @@ pub fn contain_dimensions(
     }
 }
 
+/// Calculates dimensions for a cover-fit thumbnail.
+///
+/// Cover output uses the requested aspect ratio. When upscaling is disabled,
+/// the requested box is reduced uniformly until neither output axis exceeds
+/// the corresponding source axis.
+pub fn cover_dimensions(
+    source: Dimensions,
+    bounds: Dimensions,
+    allow_upscale: bool,
+) -> Result<Dimensions> {
+    if allow_upscale || (source.width >= bounds.width && source.height >= bounds.height) {
+        return Ok(bounds);
+    }
+
+    let width_limited = u64::from(source.width)
+        .checked_mul(u64::from(bounds.height))
+        .ok_or(Error::IntegerOverflow {
+            operation: "cover-fit scale comparison",
+        })?
+        <= u64::from(source.height)
+            .checked_mul(u64::from(bounds.width))
+            .ok_or(Error::IntegerOverflow {
+                operation: "cover-fit scale comparison",
+            })?;
+
+    if width_limited {
+        let height = u64::from(bounds.height)
+            .checked_mul(u64::from(source.width))
+            .ok_or(Error::IntegerOverflow {
+                operation: "cover-fit height",
+            })?
+            / u64::from(bounds.width);
+        Dimensions::new(
+            source.width,
+            u32::try_from(height.max(1)).map_err(|_| Error::IntegerOverflow {
+                operation: "cover-fit height conversion",
+            })?,
+        )
+    } else {
+        let width = u64::from(bounds.width)
+            .checked_mul(u64::from(source.height))
+            .ok_or(Error::IntegerOverflow {
+                operation: "cover-fit width",
+            })?
+            / u64::from(bounds.height);
+        Dimensions::new(
+            u32::try_from(width.max(1)).map_err(|_| Error::IntegerOverflow {
+                operation: "cover-fit width conversion",
+            })?,
+            source.height,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +205,30 @@ mod tests {
         assert_eq!(
             contain_dimensions(dimensions(32, 16), dimensions(512, 512), true).unwrap(),
             dimensions(512, 256)
+        );
+    }
+
+    #[test]
+    fn cover_uses_the_requested_box_when_downscaling() {
+        assert_eq!(
+            cover_dimensions(dimensions(400, 200), dimensions(100, 100), false).unwrap(),
+            dimensions(100, 100)
+        );
+        assert_eq!(
+            cover_dimensions(dimensions(200, 400), dimensions(160, 90), false).unwrap(),
+            dimensions(160, 90)
+        );
+    }
+
+    #[test]
+    fn cover_respects_the_no_upscale_setting() {
+        assert_eq!(
+            cover_dimensions(dimensions(32, 16), dimensions(512, 512), false).unwrap(),
+            dimensions(16, 16)
+        );
+        assert_eq!(
+            cover_dimensions(dimensions(32, 16), dimensions(512, 512), true).unwrap(),
+            dimensions(512, 512)
         );
     }
 

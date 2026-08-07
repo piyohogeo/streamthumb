@@ -239,9 +239,10 @@ fn thumbnail_jpeg_encoded(
                 row.plan.memory.encoded_output_bytes,
                 jpeg_options,
             )?;
-            downsampler = Some(AreaDownsampler::with_sink(
+            downsampler = Some(AreaDownsampler::with_sink_and_fit(
                 row.plan.source,
                 row.plan.output,
+                options.fit,
                 sink,
             )?);
         }
@@ -282,9 +283,10 @@ fn thumbnail_png_encoded(
                 color,
                 png_options,
             )?;
-            downsampler = Some(AreaDownsampler::with_sink(
+            downsampler = Some(AreaDownsampler::with_sink_and_fit(
                 row.plan.source,
                 row.plan.output,
+                options.fit,
                 sink,
             )?);
         }
@@ -309,7 +311,11 @@ fn thumbnail_png_rgba_planned(
     let mut downsampler = None;
     let decoded = decode_png_rows(input, options, |row| {
         if downsampler.is_none() {
-            downsampler = Some(AreaDownsampler::new(row.plan.source, row.plan.output)?);
+            downsampler = Some(AreaDownsampler::new_with_fit(
+                row.plan.source,
+                row.plan.output,
+                options.fit,
+            )?);
         }
         let active = downsampler.as_mut().ok_or_else(|| {
             Error::DecodeFailure("failed to initialize the area downsampler".to_owned())
@@ -508,7 +514,8 @@ fn thumbnail_png_adam7_downsampler(
         ));
     }
 
-    let mut downsampler = SparseAreaDownsampler::new(plan.source, plan.output)?;
+    let mut downsampler =
+        SparseAreaDownsampler::new_with_fit(plan.source, plan.output, options.fit)?;
     for pass in ADAM7_PASSES {
         let samples = pass_sample_count(dimensions.width, pass.x_offset, pass.x_stride);
         let lines = pass_sample_count(dimensions.height, pass.y_offset, pass.y_stride);
@@ -1275,7 +1282,7 @@ mod tests {
     use flate2::{Compression, write::ZlibEncoder};
     use png::Filter;
     use std::io::Write;
-    use streamthumb_core::{Error as CoreError, LimitKind};
+    use streamthumb_core::{Error as CoreError, Fit, LimitKind};
 
     fn encode_png(
         width: u32,
@@ -2312,6 +2319,61 @@ mod tests {
 
         assert_eq!(thumbnail.dimensions, Dimensions::new(2, 1).unwrap());
         assert_eq!(thumbnail.pixels, [20, 20, 20, 255, 100, 100, 100, 255]);
+    }
+
+    #[test]
+    fn centered_cover_is_shared_by_ordered_adam7_and_all_outputs() {
+        let width = 4;
+        let height = 2;
+        let row = [10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255];
+        let pixels = [row, row].concat();
+        let ordered = encode_png(
+            width,
+            height,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::NoFilter,
+            &pixels,
+        );
+        let adam7 = encode_adam7_png(width, height, ColorType::Rgba, &pixels);
+        let expected = [20, 0, 0, 255, 30, 0, 0, 255].repeat(2);
+
+        for input in [&ordered, &adam7] {
+            let rgba_options = ThumbnailOptions {
+                max_width: 2,
+                max_height: 2,
+                fit: Fit::Cover,
+                output: OutputFormat::Rgba,
+                ..default_options()
+            };
+            let rgba = thumbnail_png_rgba(input, &rgba_options).unwrap();
+            assert_eq!(rgba.dimensions, Dimensions::new(2, 2).unwrap());
+            assert_eq!(rgba.pixels, expected);
+
+            let png_options = ThumbnailOptions {
+                output: OutputFormat::Png,
+                ..rgba_options
+            };
+            let png = encoded_bytes(thumbnail_png(input, &png_options).unwrap());
+            assert_eq!(decode_raw_png(&png), (ColorType::Rgba, expected.clone()));
+
+            let jpeg_options = ThumbnailOptions {
+                output: OutputFormat::Jpeg,
+                ..rgba_options
+            };
+            let jpeg = thumbnail_png_with_jpeg_options(
+                input,
+                &jpeg_options,
+                &JpegOptions {
+                    quality: 100,
+                    subsampling: JpegSubsampling::S444,
+                    ..JpegOptions::default()
+                },
+            )
+            .unwrap();
+            let (jpeg_width, jpeg_height, _) = decode_raw_jpeg(&encoded_bytes(jpeg));
+            assert_eq!((jpeg_width, jpeg_height), (2, 2));
+        }
     }
 
     #[test]

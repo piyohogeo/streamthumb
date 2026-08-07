@@ -48,6 +48,11 @@ nested `jpeg` object configures quality, RGB alpha-compositing background, and
 `"420"`, `"422"`, or `"444"` subsampling. `output: "rgba"` returns tightly
 packed, straight-alpha RGBA8 pixels with MIME type `application/octet-stream`.
 
+`fit: "contain"` preserves the complete source image inside the requested box.
+`fit: "cover"` fills the requested aspect ratio and crops equal margins from
+the left and right or the top and bottom. The centered crop is fused into area
+resampling, so it does not allocate an intermediate resized image.
+
 Area filtering uses premultiplied alpha but averages color channels in their
 encoded sample space. The package does not perform linear-light conversion or
 ICC color management, and encoded output does not inherit source PNG color

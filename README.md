@@ -18,6 +18,17 @@ The project currently implements checked thumbnail geometry, resource-limit vali
 cargo run -p streamthumb-cli -- input.png output.png --max-width 512 --max-height 512
 ```
 
+Use `--fit cover` to fill the requested aspect ratio with a centered crop. The
+crop is applied directly during area resampling and does not allocate an
+intermediate resized image. `contain` remains the default.
+
+Rust callers select the same behavior with `ThumbnailOptions::fit` and
+`Fit::Cover`. WebAssembly callers use `fit: "cover"`.
+
+```text
+cargo run -p streamthumb-cli -- input.png square.png --max-width 256 --max-height 256 --fit cover
+```
+
 PNG encoding can be configured with `--png-color`, `--png-compression`, and
 `--png-filter`. For example:
 

@@ -1,4 +1,4 @@
-use crate::{Dimensions, Error, Result};
+use crate::{Dimensions, Error, Fit, Result};
 
 /// A completed straight-alpha RGBA8 image.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +91,156 @@ struct Accumulator {
     weight: u128,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct AxisMapping {
+    // Coordinates use an exact integer lattice. Cover mappings choose a scale
+    // that represents centered fractional crop boundaries without rounding.
+    source_len: u32,
+    output_len: u32,
+    crop_start: u128,
+    crop_end: u128,
+    source_pixel_span: u128,
+    output_pixel_span: u128,
+}
+
+impl AxisMapping {
+    fn full(source_len: u32, output_len: u32) -> Self {
+        let source_pixel_span = u128::from(output_len);
+        let output_pixel_span = u128::from(source_len);
+        Self {
+            source_len,
+            output_len,
+            crop_start: 0,
+            crop_end: u128::from(source_len) * source_pixel_span,
+            source_pixel_span,
+            output_pixel_span,
+        }
+    }
+
+    fn cropped(
+        source_len: u32,
+        output_len: u32,
+        crop_start: u128,
+        crop_end: u128,
+        source_pixel_span: u128,
+    ) -> Result<Self> {
+        let crop_span = crop_end
+            .checked_sub(crop_start)
+            .ok_or_else(|| overflow("crop axis span"))?;
+        let output_pixel_span = crop_span
+            .checked_div(u128::from(output_len))
+            .filter(|span| *span != 0 && *span * u128::from(output_len) == crop_span)
+            .ok_or_else(|| overflow("crop output pixel span"))?;
+        Ok(Self {
+            source_len,
+            output_len,
+            crop_start,
+            crop_end,
+            source_pixel_span,
+            output_pixel_span,
+        })
+    }
+
+    fn sample(self, index: u32) -> Result<Option<AxisSample>> {
+        debug_assert!(index < self.source_len);
+        if index >= self.source_len {
+            return Ok(None);
+        }
+        let source_start = u128::from(index)
+            .checked_mul(self.source_pixel_span)
+            .ok_or_else(|| overflow("crop source interval"))?;
+        let source_end = source_start
+            .checked_add(self.source_pixel_span)
+            .ok_or_else(|| overflow("crop source interval"))?;
+        let clipped_start = source_start.max(self.crop_start);
+        let clipped_end = source_end.min(self.crop_end);
+        if clipped_start >= clipped_end {
+            return Ok(None);
+        }
+        let relative_start = clipped_start - self.crop_start;
+        let relative_end = clipped_end - self.crop_start;
+        let first_output = relative_start / self.output_pixel_span;
+        let last_output = div_ceil_u128(relative_end, self.output_pixel_span)?;
+        Ok(Some(AxisSample {
+            clipped_start,
+            clipped_end,
+            first_output: u32::try_from(first_output)
+                .map_err(|_| overflow("crop first output conversion"))?,
+            last_output: u32::try_from(last_output.min(u128::from(self.output_len)))
+                .map_err(|_| overflow("crop last output conversion"))?,
+        }))
+    }
+
+    fn output_interval(self, index: u32) -> Result<(u128, u128)> {
+        let start = u128::from(index)
+            .checked_mul(self.output_pixel_span)
+            .and_then(|offset| self.crop_start.checked_add(offset))
+            .ok_or_else(|| overflow("crop output interval"))?;
+        let end = start
+            .checked_add(self.output_pixel_span)
+            .ok_or_else(|| overflow("crop output interval"))?;
+        Ok((start, end))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AxisSample {
+    clipped_start: u128,
+    clipped_end: u128,
+    first_output: u32,
+    last_output: u32,
+}
+
+fn fit_mappings(
+    source: Dimensions,
+    output: Dimensions,
+    fit: Fit,
+) -> Result<(AxisMapping, AxisMapping)> {
+    if fit == Fit::Contain {
+        return Ok((
+            AxisMapping::full(source.width, output.width),
+            AxisMapping::full(source.height, output.height),
+        ));
+    }
+
+    let source_aspect = u128::from(source.width) * u128::from(output.height);
+    let output_aspect = u128::from(source.height) * u128::from(output.width);
+    if source_aspect > output_aspect {
+        let scale = u128::from(output.height) * 2;
+        let center = u128::from(source.width) * u128::from(output.height);
+        let half_crop = u128::from(source.height) * u128::from(output.width);
+        Ok((
+            AxisMapping::cropped(
+                source.width,
+                output.width,
+                center - half_crop,
+                center + half_crop,
+                scale,
+            )?,
+            AxisMapping::full(source.height, output.height),
+        ))
+    } else if source_aspect < output_aspect {
+        let scale = u128::from(output.width) * 2;
+        let center = u128::from(source.height) * u128::from(output.width);
+        let half_crop = u128::from(source.width) * u128::from(output.height);
+        Ok((
+            AxisMapping::full(source.width, output.width),
+            AxisMapping::cropped(
+                source.height,
+                output.height,
+                center - half_crop,
+                center + half_crop,
+                scale,
+            )?,
+        ))
+    } else {
+        Ok((
+            AxisMapping::full(source.width, output.width),
+            AxisMapping::full(source.height, output.height),
+        ))
+    }
+}
+
 /// A row-oriented exact area downsampler using premultiplied-alpha accumulation.
 ///
 /// Source rows must be pushed once in ascending order. Memory use depends on
@@ -99,6 +249,8 @@ struct Accumulator {
 pub struct AreaDownsampler<S = RgbaCollector> {
     source: Dimensions,
     output: Dimensions,
+    horizontal_mapping: AxisMapping,
+    vertical_mapping: AxisMapping,
     next_source_y: u32,
     current_output_y: u32,
     horizontal: Vec<Accumulator>,
@@ -115,6 +267,8 @@ pub struct AreaDownsampler<S = RgbaCollector> {
 pub struct SparseAreaDownsampler {
     source: Dimensions,
     output: Dimensions,
+    horizontal_mapping: AxisMapping,
+    vertical_mapping: AxisMapping,
     samples_received: u64,
     accumulators: Vec<Accumulator>,
 }
@@ -122,11 +276,19 @@ pub struct SparseAreaDownsampler {
 impl SparseAreaDownsampler {
     /// Creates a sparse downsampler for fixed source and output dimensions.
     pub fn new(source: Dimensions, output: Dimensions) -> Result<Self> {
+        Self::new_with_fit(source, output, Fit::Contain)
+    }
+
+    /// Creates a sparse downsampler with the selected fit strategy.
+    pub fn new_with_fit(source: Dimensions, output: Dimensions, fit: Fit) -> Result<Self> {
         let output_pixels = usize::try_from(output.pixels()?)
             .map_err(|_| overflow("sparse output pixel count conversion"))?;
+        let (horizontal_mapping, vertical_mapping) = fit_mappings(source, output, fit)?;
         Ok(Self {
             source,
             output,
+            horizontal_mapping,
+            vertical_mapping,
             samples_received: 0,
             accumulators: allocate_accumulators(output_pixels)?,
         })
@@ -138,56 +300,46 @@ impl SparseAreaDownsampler {
             return Err(Error::InvalidPixelCoordinate { x, y });
         }
 
-        let source_width = u64::from(self.source.width);
-        let source_height = u64::from(self.source.height);
+        self.samples_received = self
+            .samples_received
+            .checked_add(1)
+            .ok_or_else(|| overflow("sparse sample count"))?;
+        let Some(horizontal) = self.horizontal_mapping.sample(x)? else {
+            return Ok(());
+        };
+        let Some(vertical) = self.vertical_mapping.sample(y)? else {
+            return Ok(());
+        };
         let output_width = u64::from(self.output.width);
-        let output_height = u64::from(self.output.height);
-        let source_x_start = u64::from(x)
-            .checked_mul(output_width)
-            .ok_or_else(|| overflow("sparse horizontal source interval"))?;
-        let source_x_end = source_x_start
-            .checked_add(output_width)
-            .ok_or_else(|| overflow("sparse horizontal source interval"))?;
-        let source_y_start = u64::from(y)
-            .checked_mul(output_height)
-            .ok_or_else(|| overflow("sparse vertical source interval"))?;
-        let source_y_end = source_y_start
-            .checked_add(output_height)
-            .ok_or_else(|| overflow("sparse vertical source interval"))?;
-        let first_output_x = source_x_start / source_width;
-        let last_output_x = div_ceil(source_x_end, source_width)?;
-        let first_output_y = source_y_start / source_height;
-        let last_output_y = div_ceil(source_y_end, source_height)?;
         let red = u128::from(pixel[0]);
         let green = u128::from(pixel[1]);
         let blue = u128::from(pixel[2]);
         let alpha = u128::from(pixel[3]);
 
-        for output_y in first_output_y..last_output_y {
-            let output_y_start = output_y
-                .checked_mul(source_height)
-                .ok_or_else(|| overflow("sparse vertical output interval"))?;
-            let output_y_end = output_y_start
-                .checked_add(source_height)
-                .ok_or_else(|| overflow("sparse vertical output interval"))?;
-            let y_overlap =
-                interval_overlap(source_y_start, source_y_end, output_y_start, output_y_end);
-            for output_x in first_output_x..last_output_x {
-                let output_x_start = output_x
-                    .checked_mul(source_width)
-                    .ok_or_else(|| overflow("sparse horizontal output interval"))?;
-                let output_x_end = output_x_start
-                    .checked_add(source_width)
-                    .ok_or_else(|| overflow("sparse horizontal output interval"))?;
-                let x_overlap =
-                    interval_overlap(source_x_start, source_x_end, output_x_start, output_x_end);
-                let weight = u128::from(x_overlap) * u128::from(y_overlap);
+        for output_y in vertical.first_output..vertical.last_output {
+            let (output_y_start, output_y_end) = self.vertical_mapping.output_interval(output_y)?;
+            let y_overlap = interval_overlap(
+                vertical.clipped_start,
+                vertical.clipped_end,
+                output_y_start,
+                output_y_end,
+            );
+            for output_x in horizontal.first_output..horizontal.last_output {
+                let (output_x_start, output_x_end) =
+                    self.horizontal_mapping.output_interval(output_x)?;
+                let x_overlap = interval_overlap(
+                    horizontal.clipped_start,
+                    horizontal.clipped_end,
+                    output_x_start,
+                    output_x_end,
+                );
+                let weight = x_overlap * y_overlap;
                 if weight == 0 {
                     continue;
                 }
-                let index = output_y
+                let index = u64::from(output_y)
                     .checked_mul(output_width)
-                    .and_then(|row| row.checked_add(output_x))
+                    .and_then(|row| row.checked_add(u64::from(output_x)))
                     .ok_or_else(|| overflow("sparse output pixel index"))?;
                 let accumulator = &mut self.accumulators[usize::try_from(index)
                     .map_err(|_| overflow("sparse output index conversion"))?];
@@ -199,10 +351,6 @@ impl SparseAreaDownsampler {
             }
         }
 
-        self.samples_received = self
-            .samples_received
-            .checked_add(1)
-            .ok_or_else(|| overflow("sparse sample count"))?;
         Ok(())
     }
 
@@ -230,7 +378,8 @@ impl SparseAreaDownsampler {
             .map_err(|_| overflow("sparse output width conversion"))?;
         let output_row_bytes = rgba_row_bytes(self.output.width, "sparse output row")?;
         let mut output_row = allocate_initialized_bytes(output_row_bytes)?;
-        let expected_weight = u128::from(self.source.width) * u128::from(self.source.height);
+        let expected_weight =
+            self.horizontal_mapping.output_pixel_span * self.vertical_mapping.output_pixel_span;
         for (y, accumulators) in self.accumulators.chunks_exact(output_width).enumerate() {
             let y = u32::try_from(y).map_err(|_| overflow("sparse output y conversion"))?;
             for (x, accumulator) in accumulators.iter().enumerate() {
@@ -255,8 +404,13 @@ impl SparseAreaDownsampler {
 impl AreaDownsampler<RgbaCollector> {
     /// Creates an area downsampler for fixed source and output dimensions.
     pub fn new(source: Dimensions, output: Dimensions) -> Result<Self> {
+        Self::new_with_fit(source, output, Fit::Contain)
+    }
+
+    /// Creates an area downsampler with the selected fit strategy.
+    pub fn new_with_fit(source: Dimensions, output: Dimensions, fit: Fit) -> Result<Self> {
         let sink = RgbaCollector::new(output)?;
-        Self::with_sink(source, output, sink)
+        Self::with_sink_and_fit(source, output, fit, sink)
     }
 }
 
@@ -266,12 +420,25 @@ where
 {
     /// Creates an area downsampler that emits rows to the supplied sink.
     pub fn with_sink(source: Dimensions, output: Dimensions, sink: S) -> Result<Self> {
+        Self::with_sink_and_fit(source, output, Fit::Contain, sink)
+    }
+
+    /// Creates an area downsampler with a fit strategy and row sink.
+    pub fn with_sink_and_fit(
+        source: Dimensions,
+        output: Dimensions,
+        fit: Fit,
+        sink: S,
+    ) -> Result<Self> {
         let output_width = usize::try_from(output.width).map_err(|_| overflow("output width"))?;
         let output_row_bytes = rgba_row_bytes(output.width, "output row")?;
+        let (horizontal_mapping, vertical_mapping) = fit_mappings(source, output, fit)?;
 
         Ok(Self {
             source,
             output,
+            horizontal_mapping,
+            vertical_mapping,
             next_source_y: 0,
             current_output_y: 0,
             horizontal: allocate_accumulators(output_width)?,
@@ -329,18 +496,10 @@ where
 
     fn reduce_horizontal(&mut self, pixels: &[u8]) -> Result<()> {
         self.horizontal.fill(Accumulator::default());
-        let source_width = u64::from(self.source.width);
-        let output_width = u64::from(self.output.width);
-
-        for source_x in 0..source_width {
-            let source_start = source_x
-                .checked_mul(output_width)
-                .ok_or_else(|| overflow("horizontal source interval"))?;
-            let source_end = source_start
-                .checked_add(output_width)
-                .ok_or_else(|| overflow("horizontal source interval"))?;
-            let first_output_x = source_start / source_width;
-            let last_output_x = div_ceil(source_end, source_width)?;
+        for source_x in 0..self.source.width {
+            let Some(sample) = self.horizontal_mapping.sample(source_x)? else {
+                continue;
+            };
             let pixel_offset = usize::try_from(source_x)
                 .map_err(|_| overflow("source pixel index"))?
                 .checked_mul(4)
@@ -350,20 +509,21 @@ where
             let blue = u128::from(pixels[pixel_offset + 2]);
             let alpha = u128::from(pixels[pixel_offset + 3]);
 
-            for output_x in first_output_x..last_output_x {
-                let output_start = output_x
-                    .checked_mul(source_width)
-                    .ok_or_else(|| overflow("horizontal output interval"))?;
-                let output_end = output_start
-                    .checked_add(source_width)
-                    .ok_or_else(|| overflow("horizontal output interval"))?;
-                let overlap = interval_overlap(source_start, source_end, output_start, output_end);
+            for output_x in sample.first_output..sample.last_output {
+                let (output_start, output_end) =
+                    self.horizontal_mapping.output_interval(output_x)?;
+                let overlap = interval_overlap(
+                    sample.clipped_start,
+                    sample.clipped_end,
+                    output_start,
+                    output_end,
+                );
                 if overlap == 0 {
                     continue;
                 }
                 let accumulator = &mut self.horizontal
                     [usize::try_from(output_x).map_err(|_| overflow("output pixel index"))?];
-                let weight = u128::from(overlap);
+                let weight = overlap;
                 accumulator.red += red * alpha * weight;
                 accumulator.green += green * alpha * weight;
                 accumulator.blue += blue * alpha * weight;
@@ -375,36 +535,22 @@ where
     }
 
     fn accumulate_vertical(&mut self, source_y: u32) -> core::result::Result<(), S::Error> {
-        let source_height = u64::from(self.source.height);
-        let output_height = u64::from(self.output.height);
-        let source_start = u64::from(source_y)
-            .checked_mul(output_height)
-            .ok_or_else(|| overflow("vertical source interval"))?;
-        let source_end = source_start
-            .checked_add(output_height)
-            .ok_or_else(|| overflow("vertical source interval"))?;
-        let first_output_y = source_start / source_height;
-        let last_output_y = div_ceil(source_end, source_height)?;
+        let Some(sample) = self.vertical_mapping.sample(source_y)? else {
+            return Ok(());
+        };
 
-        for output_y in first_output_y..last_output_y {
-            let output_y_u32 =
-                u32::try_from(output_y).map_err(|_| overflow("vertical output row conversion"))?;
-            while self.current_output_y < output_y_u32 {
+        for output_y in sample.first_output..sample.last_output {
+            while self.current_output_y < output_y {
                 self.finalize_output_row()?;
             }
 
-            let output_start = output_y
-                .checked_mul(source_height)
-                .ok_or_else(|| overflow("vertical output interval"))?;
-            let output_end = output_start
-                .checked_add(source_height)
-                .ok_or_else(|| overflow("vertical output interval"))?;
-            let overlap = u128::from(interval_overlap(
-                source_start,
-                source_end,
+            let (output_start, output_end) = self.vertical_mapping.output_interval(output_y)?;
+            let overlap = interval_overlap(
+                sample.clipped_start,
+                sample.clipped_end,
                 output_start,
                 output_end,
-            ));
+            );
             for (vertical, horizontal) in self.vertical.iter_mut().zip(&self.horizontal) {
                 vertical.red += horizontal.red * overlap;
                 vertical.green += horizontal.green * overlap;
@@ -412,7 +558,7 @@ where
                 vertical.alpha += horizontal.alpha * overlap;
                 vertical.weight += horizontal.weight * overlap;
             }
-            if source_end >= output_end {
+            if sample.clipped_end >= output_end {
                 self.finalize_output_row()?;
             }
         }
@@ -420,7 +566,8 @@ where
     }
 
     fn finalize_output_row(&mut self) -> core::result::Result<(), S::Error> {
-        let expected_weight = u128::from(self.source.width) * u128::from(self.source.height);
+        let expected_weight =
+            self.horizontal_mapping.output_pixel_span * self.vertical_mapping.output_pixel_span;
         for (x, accumulator) in self.vertical.iter().enumerate() {
             if accumulator.weight != expected_weight {
                 return Err(Error::InvalidCoverage {
@@ -512,17 +659,22 @@ fn allocate_initialized_bytes(len: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-const fn interval_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> u64 {
+const fn interval_overlap(a_start: u128, a_end: u128, b_start: u128, b_end: u128) -> u128 {
     let start = if a_start > b_start { a_start } else { b_start };
     let end = if a_end < b_end { a_end } else { b_end };
     end.saturating_sub(start)
 }
 
-fn div_ceil(numerator: u64, denominator: u64) -> Result<u64> {
+fn div_ceil_u128(numerator: u128, denominator: u128) -> Result<u128> {
+    if denominator == 0 {
+        return Err(Error::IntegerOverflow {
+            operation: "division by zero while mapping crop coverage",
+        });
+    }
     let quotient = numerator / denominator;
     let remainder = numerator % denominator;
     quotient
-        .checked_add(u64::from(remainder != 0))
+        .checked_add(u128::from(remainder != 0))
         .ok_or_else(|| overflow("ceiling division"))
 }
 
@@ -634,6 +786,42 @@ mod tests {
 
     fn resize_sparse(source: Dimensions, output: Dimensions, pixels: &[u8]) -> RgbaImage {
         let mut downsampler = SparseAreaDownsampler::new(source, output).unwrap();
+        for y in (0..source.height).rev() {
+            for x in (0..source.width).rev() {
+                let offset =
+                    usize::try_from((u64::from(y) * u64::from(source.width) + u64::from(x)) * 4)
+                        .unwrap();
+                downsampler
+                    .push_pixel(x, y, pixels[offset..offset + 4].try_into().unwrap())
+                    .unwrap();
+            }
+        }
+        downsampler.finish().unwrap()
+    }
+
+    fn resize_with_fit(
+        source: Dimensions,
+        output: Dimensions,
+        fit: Fit,
+        pixels: &[u8],
+    ) -> RgbaImage {
+        let mut downsampler = AreaDownsampler::new_with_fit(source, output, fit).unwrap();
+        let row_len = usize::try_from(source.width).unwrap() * 4;
+        for (y, row) in pixels.chunks_exact(row_len).enumerate() {
+            downsampler
+                .push_row(u32::try_from(y).unwrap(), row)
+                .unwrap();
+        }
+        downsampler.finish().unwrap()
+    }
+
+    fn resize_sparse_with_fit(
+        source: Dimensions,
+        output: Dimensions,
+        fit: Fit,
+        pixels: &[u8],
+    ) -> RgbaImage {
+        let mut downsampler = SparseAreaDownsampler::new_with_fit(source, output, fit).unwrap();
         for y in (0..source.height).rev() {
             for x in (0..source.width).rev() {
                 let offset =
@@ -807,6 +995,77 @@ mod tests {
     }
 
     #[test]
+    fn cover_crops_equal_horizontal_margins() {
+        let source = Dimensions::new(4, 2).unwrap();
+        let output = Dimensions::new(2, 2).unwrap();
+        let row = [10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255];
+        let pixels = [row, row].concat();
+        let image = resize_with_fit(source, output, Fit::Cover, &pixels);
+        assert_eq!(image.pixels, [20, 0, 0, 255, 30, 0, 0, 255].repeat(2));
+    }
+
+    #[test]
+    fn cover_crops_equal_vertical_margins() {
+        let source = Dimensions::new(2, 4).unwrap();
+        let output = Dimensions::new(2, 2).unwrap();
+        let mut pixels = Vec::new();
+        for value in [10, 20, 30, 40] {
+            pixels.extend_from_slice(&[value, 0, 0, 255].repeat(2));
+        }
+        let image = resize_with_fit(source, output, Fit::Cover, &pixels);
+        assert_eq!(
+            image.pixels,
+            [20, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 30, 0, 0, 255]
+        );
+    }
+
+    #[test]
+    fn cover_preserves_fractional_center_boundaries() {
+        let source = Dimensions::new(5, 2).unwrap();
+        let output = Dimensions::new(2, 2).unwrap();
+        let row = [
+            0, 0, 0, 255, 40, 0, 0, 255, 80, 0, 0, 255, 120, 0, 0, 255, 160, 0, 0, 255,
+        ];
+        let pixels = [row, row].concat();
+        let ordered = resize_with_fit(source, output, Fit::Cover, &pixels);
+        let sparse = resize_sparse_with_fit(source, output, Fit::Cover, &pixels);
+        assert_eq!(ordered.pixels, [60, 0, 0, 255, 100, 0, 0, 255].repeat(2));
+        assert_eq!(sparse, ordered);
+    }
+
+    #[test]
+    fn cover_matches_an_independent_fractional_reference() {
+        let source = Dimensions::new(7, 5).unwrap();
+        let pixels = (0..source.pixels().unwrap())
+            .flat_map(|index| {
+                let value = u8::try_from(index).unwrap();
+                [
+                    value.wrapping_mul(17),
+                    value.wrapping_mul(29),
+                    value.wrapping_mul(43),
+                    value.wrapping_mul(7),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        for output in [
+            Dimensions::new(3, 3).unwrap(),
+            Dimensions::new(4, 2).unwrap(),
+            Dimensions::new(2, 4).unwrap(),
+            Dimensions::new(9, 6).unwrap(),
+        ] {
+            let actual = resize_with_fit(source, output, Fit::Cover, &pixels);
+            let expected = reference_cover_resize(source, output, &pixels);
+            for (index, (actual, expected)) in actual.pixels.iter().zip(expected).enumerate() {
+                assert!(
+                    actual.abs_diff(expected) <= 1,
+                    "byte {index} differs for {output:?}: actual {actual}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn matches_an_independent_full_frame_reference_for_arbitrary_ratios() {
         let source = Dimensions::new(7, 5).unwrap();
         let mut pixels = Vec::new();
@@ -925,15 +1184,61 @@ mod tests {
     }
 
     fn reference_area_resize(source: Dimensions, output: Dimensions, pixels: &[u8]) -> Vec<u8> {
+        reference_area_resize_region(
+            source,
+            output,
+            pixels,
+            0.0,
+            0.0,
+            f64::from(source.width),
+            f64::from(source.height),
+        )
+    }
+
+    fn reference_cover_resize(source: Dimensions, output: Dimensions, pixels: &[u8]) -> Vec<u8> {
+        let source_aspect = f64::from(source.width) / f64::from(source.height);
+        let output_aspect = f64::from(output.width) / f64::from(output.height);
+        let (crop_width, crop_height) = if source_aspect > output_aspect {
+            (
+                f64::from(source.height) * output_aspect,
+                f64::from(source.height),
+            )
+        } else {
+            (
+                f64::from(source.width),
+                f64::from(source.width) / output_aspect,
+            )
+        };
+        reference_area_resize_region(
+            source,
+            output,
+            pixels,
+            (f64::from(source.width) - crop_width) / 2.0,
+            (f64::from(source.height) - crop_height) / 2.0,
+            crop_width,
+            crop_height,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reference_area_resize_region(
+        source: Dimensions,
+        output: Dimensions,
+        pixels: &[u8],
+        crop_left: f64,
+        crop_top: f64,
+        crop_width: f64,
+        crop_height: f64,
+    ) -> Vec<u8> {
         let mut result = Vec::new();
         for output_y in 0..output.height {
-            let top = f64::from(output_y) * f64::from(source.height) / f64::from(output.height);
+            let top = crop_top + f64::from(output_y) * crop_height / f64::from(output.height);
             let bottom =
-                f64::from(output_y + 1) * f64::from(source.height) / f64::from(output.height);
+                crop_top + f64::from(output_y + 1) * crop_height / f64::from(output.height);
             for output_x in 0..output.width {
-                let left = f64::from(output_x) * f64::from(source.width) / f64::from(output.width);
+                let left = crop_left + f64::from(output_x) * crop_width / f64::from(output.width);
                 let right =
-                    f64::from(output_x + 1) * f64::from(source.width) / f64::from(output.width);
+                    crop_left + f64::from(output_x + 1) * crop_width / f64::from(output.width);
                 let mut premultiplied = [0.0_f64; 3];
                 let mut alpha_sum = 0.0_f64;
                 let mut weight_sum = 0.0_f64;

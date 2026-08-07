@@ -3,7 +3,7 @@
 use std::hint::black_box;
 
 use libfuzzer_sys::fuzz_target;
-use streamthumb_core::{OutputFormat, ThumbnailOptions};
+use streamthumb_core::{Fit, OutputFormat, ThumbnailOptions};
 use streamthumb_png::{
     JpegOptions, JpegSubsampling, PngColorMode, PngCompression, PngFilter, PngOptions,
     thumbnail_png, thumbnail_png_with_encoder_options, thumbnail_png_with_jpeg_options,
@@ -18,6 +18,11 @@ fuzz_target!(|data: &[u8]| {
     let mut options = ThumbnailOptions {
         max_width: 64,
         max_height: 64,
+        fit: if data.get(8).copied().unwrap_or_default() & 1 == 0 {
+            Fit::Contain
+        } else {
+            Fit::Cover
+        },
         output,
         ..ThumbnailOptions::default()
     };
