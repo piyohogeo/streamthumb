@@ -1,0 +1,24 @@
+[package]
+name = "streamthumb-browser-file-input-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+rust-version = "1.85"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+js-sys = "0.3"
+streamthumb-core = { path = "../../crates/streamthumb-core" }
+streamthumb-png = { path = "../../crates/streamthumb-png" }
+wasm-bindgen = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

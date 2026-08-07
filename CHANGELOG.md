@@ -16,6 +16,9 @@ project follows Semantic Versioning.
 - A GitHub Pages demo with local-file and bundled-sample input, every current
   WebAssembly option, typed memory preflight, worker-based PNG/JPEG/RGBA output,
   previews, downloads, and automated Chrome coverage.
+- An isolated browser File input spike proving that `Blob.slice()` and
+  `FileReaderSync` can drive the production seekable reader path without a
+  complete encoded-input copy in Chrome and Firefox workers.
 
 ### Changed
 

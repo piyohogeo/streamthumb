@@ -26,6 +26,9 @@ jobs:
       - run: cargo fmt --manifest-path spikes/incremental-input/Cargo.toml --check
       - run: cargo clippy --manifest-path spikes/incremental-input/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path spikes/incremental-input/Cargo.toml
+      - run: cargo fmt --manifest-path spikes/browser-file-input/Cargo.toml --check
+      - run: cargo clippy --manifest-path spikes/browser-file-input/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path spikes/browser-file-input/Cargo.toml
 
   wasm:
     runs-on: ubuntu-latest
@@ -35,6 +38,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - run: cargo check -p streamthumb-wasm --target wasm32-unknown-unknown
+      - run: cargo check --manifest-path spikes/browser-file-input/Cargo.toml --target wasm32-unknown-unknown
 
   rust-packages:
     runs-on: ubuntu-latest
@@ -102,6 +106,13 @@ jobs:
           wasm-pack test --headless --chrome --chromedriver=${{ steps.chrome.outputs.chromedriver-path }} crates/streamthumb-wasm
           rm -f crates/streamthumb-wasm/webdriver.json
       - run: wasm-pack test --headless --firefox crates/streamthumb-wasm
+      - name: Test browser File input spike in Chrome
+        run: |
+          printf '{"goog:chromeOptions":{"binary":"%s","args":[]}}\n' '${{ steps.chrome.outputs.chrome-path }}' > spikes/browser-file-input/webdriver.json
+          wasm-pack test --headless --chrome --chromedriver=${{ steps.chrome.outputs.chromedriver-path }} spikes/browser-file-input
+          rm -f spikes/browser-file-input/webdriver.json
+      - name: Test browser File input spike in Firefox
+        run: wasm-pack test --headless --firefox spikes/browser-file-input
 
   benchmark-tool:
     runs-on: ubuntu-latest

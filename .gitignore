@@ -8,6 +8,7 @@
 /benchmarks/target/
 /spikes/jpeg-encoder-selection/target/
 /spikes/incremental-input/target/
+/spikes/browser-file-input/target/
 /benchmarks/tmp/
 /benchmarks/wasm-pkg/
 /benchmarks/node_modules/

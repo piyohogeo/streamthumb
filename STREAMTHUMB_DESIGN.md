@@ -1355,3 +1355,13 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. Planned working memory, full RGBA equivalent, and WebAssembly linear-memory high-water observations are labeled as three different measurements. The UI does not claim that any of them is exact browser-memory usage.
 5. The site build copies only static demo files, the locally built WebAssembly package, and a licensed PNG Suite smoke fixture into `target/pages`. All runtime asset URLs are relative so deployment works below the `/streamthumb/` project path.
 6. Headless Chrome verifies PNG, JPEG, and RGBA output, browser decoding, finite planning and memory observations, typed low-memory rejection, and recovery. The Pages workflow builds and tests pull requests, while only non-pull-request runs upload and deploy the Pages artifact.
+
+### Phase 36 decisions
+
+1. The browser File input investigation begins in the excluded `spikes/browser-file-input` package and adds no supported WebAssembly API or Pages behavior.
+2. A synchronous `readAt(offset, length)` callback backed by worker-only `FileReaderSync` and `Blob.slice()` implements Rust `Read + Seek` without retaining a complete encoded-input buffer.
+3. The initial adapter uses the production `thumbnail_png_rgba_from_reader` path and the existing Rust `BufReader`; it adds no second cache and records read calls, bytes read, largest read, seek calls, and offsets.
+4. Checked arithmetic restricts the declared input length to JavaScript safe integers and seek positions to the inclusive encoded-input range. Callback results must be exact-length `Uint8Array` values.
+5. A JavaScript value thrown by the input callback is retained separately from the placeholder I/O error and returned unchanged at the WebAssembly boundary.
+6. Dedicated-worker tests in Chrome and Firefox prove non-interlaced RGBA8 byte parity with the slice path, checked seek and EOF behavior, limit rejection before the first content read, callback exception identity, and callback result validation.
+7. Adoption remains undecided until the complete color/depth and Adam7 matrix, encoded and chunked outputs, boundary faults, and performance measurements are complete.
