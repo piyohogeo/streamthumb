@@ -103,9 +103,37 @@ const routes = new Map([
   ],
 ]);
 
+let resolveReport;
+const reportPromise = new Promise((resolve) => {
+  resolveReport = resolve;
+});
+let reportReceived = false;
+
 const server = http.createServer(async (request, response) => {
   try {
     const pathname = new URL(request.url, "http://localhost").pathname;
+    if (pathname === "/result" && request.method === "POST") {
+      let body = "";
+      for await (const chunk of request) {
+        body += chunk;
+        if (body.length > 65_536) {
+          throw new Error("Browser result exceeds 65,536 bytes.");
+        }
+      }
+      const report = JSON.parse(body);
+      if (
+        !reportReceived
+        && (report.result === "pass" || report.result === "fail")
+        && typeof report.message === "string"
+      ) {
+        reportReceived = true;
+        response.writeHead(204);
+        response.end(() => resolveReport(report));
+        return;
+      }
+      response.writeHead(204).end();
+      return;
+    }
     const route = routes.get(pathname);
     if (!route) {
       response.writeHead(404).end("Not found");
@@ -141,43 +169,67 @@ try {
       "--disable-dev-shm-usage",
       "--no-sandbox",
       `--user-data-dir=${chromeProfile}`,
-      "--virtual-time-budget=20000",
-      "--dump-dom",
       `http://127.0.0.1:${address.port}/`,
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
-  let stdout = "";
   let stderr = "";
-  browser.stdout.setEncoding("utf8").on("data", (chunk) => {
-    stdout += chunk;
-  });
+  browser.stdout.resume();
   browser.stderr.setEncoding("utf8").on("data", (chunk) => {
     stderr += chunk;
   });
 
-  const exitCode = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      browser.kill();
-      reject(new Error("Chrome smoke test timed out."));
-    }, 30000);
-    browser.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
+  let exitCode;
+  const browserExit = new Promise((resolve, reject) => {
+    browser.once("error", reject);
     browser.once("exit", (code) => {
-      clearTimeout(timeout);
+      exitCode = code;
       resolve(code);
     });
   });
-  if (exitCode !== 0 || !stdout.includes('data-result="pass"')) {
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(
+      () => reject(new Error("Chrome smoke test timed out.")),
+      30000,
+    );
+  });
+
+  try {
+    const report = await Promise.race([
+      reportPromise,
+      timeoutPromise,
+      browserExit.then((code) => {
+        throw new Error(`Chrome exited before reporting with status ${code}`);
+      }),
+    ]);
+    if (report.result !== "pass") {
+      throw new Error(report.message);
+    }
+    console.log(report.message);
+  } catch (error) {
     process.stderr.write(stderr);
-    process.stderr.write(stdout);
-    throw new Error(`Chrome package smoke test failed with status ${exitCode}`);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (exitCode === undefined) {
+      browser.kill();
+      await Promise.race([
+        browserExit.catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 5000)),
+      ]);
+    }
   }
-  const result = stdout.match(/PASS: @streamthumb\/wasm[^<]+/)?.[0];
-  console.log(result ?? "PASS: npm package browser smoke test completed");
 } finally {
   await new Promise((resolve) => server.close(resolve));
-  await rm(chromeProfile, { recursive: true, force: true });
+  try {
+    await rm(chromeProfile, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 200,
+    });
+  } catch (error) {
+    console.warn(`Could not remove the temporary Chrome profile: ${error}`);
+  }
 }

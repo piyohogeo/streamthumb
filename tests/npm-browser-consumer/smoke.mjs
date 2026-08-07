@@ -5,9 +5,14 @@ import init, {
 
 const status = document.querySelector("#status");
 
-function finish(result, message) {
+async function finish(result, message) {
   document.documentElement.dataset.result = result;
   status.textContent = message;
+  await fetch("/result", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ result, message }),
+  });
 }
 
 function hasPngSignature(bytes) {
@@ -44,10 +49,10 @@ try {
     throw new Error(`decoded PNG is ${decodedDimensions}`);
   }
 
-  finish(
+  await finish(
     "pass",
     `PASS: @streamthumb/wasm ${streamthumbVersion()} created and decoded a 32x32 PNG`,
   );
 } catch (error) {
-  finish("fail", `FAIL: ${error instanceof Error ? error.stack : error}`);
+  await finish("fail", `FAIL: ${error instanceof Error ? error.stack : error}`);
 }
