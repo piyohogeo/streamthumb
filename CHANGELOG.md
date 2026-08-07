@@ -7,6 +7,8 @@ project follows Semantic Versioning.
 
 ### Added
 
+- Seekable `Read + Seek` PNG input APIs, native CLI integration, a runnable
+  file-to-file example, and native Peak RSS comparisons against slice input.
 - Bounded direct-to-writer PNG and JPEG APIs used by CLI file output.
 - Synchronous WebAssembly chunk callbacks for bounded PNG and JPEG delivery.
 - Failure-safe CLI destination replacement through same-directory staging.

@@ -51,6 +51,19 @@ data, and rewind between bounded metadata and decode passes. For example,
 `File` directly to a writer. Slice APIs remain compatibility
 wrappers over `Cursor<&[u8]>`.
 
+The runnable native example reads directly from a file and writes PNG or JPEG
+without retaining either complete encoded byte stream:
+
+```text
+cargo run -p streamthumb-png --example native_reader -- input.png output.jpg cover
+```
+
+It demonstrates format selection, `contain` or centered `cover`, explicit
+resource limits, and normal Rust error propagation. See
+[`native_reader.rs`](crates/streamthumb-png/examples/native_reader.rs).
+The direct writer APIs write immediately to their destination; callers that
+need failure-safe replacement should use a staging file as the CLI does.
+
 CLI values match the WebAssembly literals: color accepts `auto`, `rgba8`,
 `rgb8`, `grayscale-alpha8`, or `grayscale8`; compression accepts `none`,
 `fastest`, `fast`, `balanced`, or `high`; and filter accepts `default`, `none`,

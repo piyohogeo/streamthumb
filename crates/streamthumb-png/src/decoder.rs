@@ -441,6 +441,22 @@ pub fn thumbnail_png_to_writer<W: Write + 'static>(
 }
 
 /// Writes a PNG thumbnail from a seekable reader with default PNG settings.
+///
+/// ```no_run
+/// use std::fs::File;
+/// use streamthumb_core::{OutputFormat, ThumbnailOptions};
+/// use streamthumb_png::thumbnail_png_from_reader_to_writer;
+///
+/// let options = ThumbnailOptions {
+///     output: OutputFormat::Png,
+///     ..ThumbnailOptions::default()
+/// };
+/// let input = File::open("input.png")?;
+/// let output = File::create("thumbnail.png")?;
+/// let info = thumbnail_png_from_reader_to_writer(input, &options, output)?;
+/// assert_eq!(info.format, OutputFormat::Png);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn thumbnail_png_from_reader_to_writer<R, W>(
     reader: R,
     options: &ThumbnailOptions,

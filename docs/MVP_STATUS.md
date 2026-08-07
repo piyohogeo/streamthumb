@@ -15,21 +15,21 @@ version 0.1.0 before publication.
 | Premultiplied-alpha filtering | Complete | Transparent-edge and fully transparent pixel tests verify straight-alpha output without color halos. |
 | Malformed and oversized input rejection | Complete | Typed error tests cover truncation, malformed chunks, APNG, byte, dimension, pixel, output, decoder-memory, and working-memory limits. Fuzz targets cover rows, thumbnails, and the area downsampler. |
 | Configurable resource limits | Complete | Rust and WebAssembly APIs expose every required input, output, and working-memory limit. Defaults and documentation are checked together in CI. |
-| Rust-native CLI | Complete | `streamthumb-cli` produces bounded encoded PNG or JPEG output, validates codec-specific arguments and input size, and replaces destinations only after staged output succeeds. A process-level test verifies that malformed input preserves an existing destination and removes staging files. |
+| Rust-native CLI | Complete | `streamthumb-cli` reads through the seekable-reader API without retaining complete encoded input, produces bounded encoded PNG or JPEG output, validates codec-specific arguments and input size, and replaces destinations only after staged output succeeds. A process-level test verifies that malformed input preserves an existing destination and removes staging files. |
 | PNG encoder configuration | Complete | Rust, WebAssembly, and CLI APIs expose 8-bit color mode, compression, and filter settings. Tests verify IHDR color types, decoded pixels, every compression/filter combination, Adam7 input, defaults, and invalid boundary values. |
 | JPEG output | Complete | Rust, WebAssembly, and CLI APIs expose baseline sequential JPEG with quality, compositing background, and 4:2:0/4:2:2/4:4:4 controls. Independent decoding covers ordered and Adam7 inputs, multiple MCU rows, quality 100, and limits. |
 | Browser WebAssembly package | Complete | Chrome and Firefox run worker-based wasm-bindgen tests, including multi-chunk PNG/JPEG output and callback exception identity. A separately installed tarball consumer verifies multi-chunk output in headless Chrome. |
 | Node.js and Deno package use | Complete | CI installs the tarball into an isolated consumer and runs the public examples with explicit WebAssembly bytes. |
 | Cloudflare Worker adapter | Source complete; runtime deferred | The runtime-neutral adapter and local package reference are checked. Live-account validation is intentionally excluded because no Cloudflare account is available. |
-| Memory and comparison benchmarks | Complete for current baselines | Reproducible native and WebAssembly measurements compare streamthumb with a full-frame image-rs baseline and pinned jSquash packages. |
+| Memory and comparison benchmarks | Complete for current baselines | Reproducible native and WebAssembly measurements compare streamthumb with a full-frame image-rs baseline and pinned jSquash packages. Native runners also compare slice and seekable-reader input and require byte-identical PNG/JPEG output. |
 | Product positioning | Complete | The README reports measured memory/runtime tradeoffs and compares the project scope with jSquash and wasm-vips without claiming novelty for streaming decode alone. |
 
 ## Support beyond the original MVP
 
 Version 0.1.0 also supports Adam7, every standard PNG color type and legal bit
 depth, applicable palette/grayscale/RGB `tRNS` transparency, centered cover
-cropping, raw RGBA output, strict TypeScript declarations, and reproducible
-release-candidate artifacts.
+cropping, native `Read + Seek` input, raw RGBA output, strict TypeScript
+declarations, and reproducible release-candidate artifacts.
 
 ## Streaming output extension status
 
@@ -61,12 +61,13 @@ bounded. The encoder selection was revised after independent decoding exposed
 a correctness defect in the initially selected dependency; see
 `docs/JPEG_ENCODER_SELECTION.md`.
 
-The optional native output stage adds PNG and JPEG APIs that take ownership of
-an `std::io::Write` implementation and return `ThumbnailInfo`. The byte cap is
-still enforced as encoded chunks are forwarded, while memory planning records
-zero retained encoded-result bytes. The CLI uses this path for direct file
-output. The CLI writes to a same-directory staging file and commits it only
-after the encoder and writer succeed.
+The optional native I/O stage adds seekable PNG input and PNG/JPEG APIs that
+take ownership of `Read + Seek` and `Write` implementations. Input length is
+checked before decoding, bounded metadata and decode passes explicitly rewind,
+and `ThumbnailInfo` describes direct encoded output. Memory planning excludes
+caller-owned encoded input and records zero retained encoded-result bytes. The
+CLI uses this path for direct file I/O, writes to a same-directory staging file,
+and commits it only after the encoder and writer succeed.
 
 The WebAssembly output stage adds `thumbnailPngToChunks`. It synchronously
 delivers encoded PNG or JPEG output in chunks of at most 64 KiB and returns
