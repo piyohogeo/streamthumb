@@ -83,6 +83,14 @@ WebAssembly linear memory only grows, so this value is a process-local
 high-water observation intended for diagnostics and benchmarks, not the exact
 memory cost of one thumbnail operation.
 
+## Color handling
+
+Resampling uses premultiplied alpha, then returns straight-alpha RGBA8. Color
+channels are averaged in their encoded sample space; the pipeline does not
+convert sRGB values to linear light. PNG `sRGB`, `gAMA`, `cHRM`, and ICC color
+metadata do not affect resampling and are not copied to encoded output. The
+API is therefore deterministic but is not a color-managed image pipeline.
+
 ## Accepted PNG input
 
 The decoder accepts valid non-interlaced and Adam7 PNG images in the color types and bit depths listed in the project [README](../README.md), including supported `tRNS` transparency. Animated PNG control chunks are rejected rather than silently processing only one frame.

@@ -40,6 +40,7 @@ for (const publicExport of [
   "`Symbol.dispose`",
   "function streamthumbVersion(): string;",
   "function wasmMemoryBytes(): number;",
+  "does not\nconvert sRGB values to linear light",
 ]) {
   requireText(api, publicExport, "docs/WASM_API.md");
 }

@@ -1223,3 +1223,25 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. Node.js runs the JavaScript consumer under the Node 24 CI environment. Deno 2.9.5 runs the TypeScript consumer in manual node_modules mode with read permission restricted to the generated consumer directory.
 5. Deno is installed with the pinned official `denoland/setup-deno` 2.0.5 action. The Deno consumer also validates the package's public TypeScript declarations during execution.
 6. Both consumers verify version export, output dimensions, PNG MIME type, and PNG signature. Cloudflare runtime validation and npm publication remain excluded.
+
+### Phase 21 decisions
+
+1. Public browser, Node.js, and Deno examples use the canonical generated package or an installed release-candidate tarball rather than the retired repository-level `pkg` directory.
+2. Normal CI executes the public browser example in headless Chrome and copies the Node.js and Deno example sources into the isolated tarball consumer before executing them.
+3. The WebAssembly API contract records every option default, input and output representation, resource boundary, initialization mode, utility export, disposal behavior, and error category.
+4. A repository check ties the documented defaults to the Rust implementation and rejects stale example package paths.
+5. The Cloudflare Worker source remains aligned with the canonical package directory, but live-account validation remains explicitly deferred.
+
+### Phase 22 decisions
+
+1. The published npm README begins with consumer installation and API usage, while repository-only build instructions are kept in a separate development section.
+2. Package preflight checks require the workspace and npm versions to match, enforce public metadata and keywords, compare both packaged license files byte-for-byte, and validate every public TypeScript export.
+3. The release procedure binds a signed tag and GitHub Release to the exact source revision and already verified tarball. Release assets and the npm package must never be rebuilt after verification.
+4. The `@streamthumb/wasm` name is not currently present in the public npm registry. Access to the `@streamthumb` scope remains an external publication prerequisite.
+
+### Phase 23 decisions
+
+1. The design completion audit is recorded in `docs/MVP_STATUS.md`, including implementation evidence and explicitly deferred external runtime checks.
+2. The public contract now states that resampling averages encoded sample values, does not convert sRGB to linear light, ignores color-management metadata, and does not copy that metadata to encoded PNG output.
+3. Dedicated-worker WebAssembly tests cover raw RGBA output, input and working-memory limit rejection, numeric validation, boolean validation, and every supported string-literal option boundary.
+4. Cloudflare live validation and Safari automation remain deferred. These external gaps do not change the runtime-neutral package architecture or the tested Chrome, Firefox, Node.js, and Deno contract.

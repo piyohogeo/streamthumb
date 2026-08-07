@@ -84,6 +84,7 @@ for (const expected of [
   "result.free();",
   "https://github.com/piyohogeo/streamthumb/blob/main/docs/WASM_API.md",
   "## Node.js and Deno",
+  "does not perform linear-light conversion",
 ]) {
   if (!packageReadme.includes(expected)) {
     throw new Error(`Published README is missing: ${expected}`);

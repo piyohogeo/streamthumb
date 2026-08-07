@@ -24,3 +24,5 @@ project follows Semantic Versioning.
   contract, and CI smoke tests that execute the public example sources.
 - Release-candidate artifact verification and an explicit, no-rebuild release
   procedure for the npm package and attached GitHub assets.
+- A design-completion traceability audit, documented color-space limitations,
+  and expanded WebAssembly boundary tests for RGBA output and invalid options.

@@ -39,6 +39,11 @@ result.free();
 
 `output: "png"` returns encoded PNG bytes with MIME type `image/png`. `output: "rgba"` returns tightly packed, straight-alpha RGBA8 pixels with MIME type `application/octet-stream`.
 
+Area filtering uses premultiplied alpha but averages color channels in their
+encoded sample space. The package does not perform linear-light conversion or
+ICC color management, and encoded output does not inherit source PNG color
+metadata.
+
 The package exports `ThumbnailOptions`, `ThumbnailFit`, `ThumbnailFilter`, and
 `ThumbnailOutputFormat` TypeScript types. Every option is optional, and
 `thumbnailPng` also accepts an omitted or `null` options value.

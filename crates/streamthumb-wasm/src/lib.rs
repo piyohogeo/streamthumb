@@ -277,6 +277,13 @@ mod browser_tests {
     const PNG_INPUT: &[u8] =
         include_bytes!("../../../fuzz/corpus/thumbnail_png/pngsuite_basn6a08.png");
 
+    fn options_with(name: &str, value: &JsValue) -> Object {
+        let options = Object::new();
+        Reflect::set(options.as_ref(), &JsValue::from_str(name), value)
+            .expect("the test options object must be writable");
+        options
+    }
+
     #[wasm_bindgen_test]
     fn creates_a_png_thumbnail_in_a_dedicated_worker() {
         let options = Object::new();
@@ -314,6 +321,60 @@ mod browser_tests {
         match thumbnail_png(PNG_INPUT, &JsValue::from_str("invalid")) {
             Ok(_) => panic!("non-object options must fail"),
             Err(_) => {}
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn creates_raw_rgba_output() {
+        let options = Object::new();
+        for (name, value) in [
+            ("maxWidth", JsValue::from_f64(8.0)),
+            ("maxHeight", JsValue::from_f64(8.0)),
+            ("output", JsValue::from_str("rgba")),
+        ] {
+            Reflect::set(options.as_ref(), &JsValue::from_str(name), &value)
+                .expect("the test options object must be writable");
+        }
+
+        let result = thumbnail_png(PNG_INPUT, options.as_ref()).expect("thumbnail must succeed");
+        assert_eq!(result.width(), 8);
+        assert_eq!(result.height(), 8);
+        assert_eq!(result.mime_type(), "application/octet-stream");
+        assert_eq!(result.format(), "rgba");
+        assert_eq!(result.bytes().len(), 8 * 8 * 4);
+    }
+
+    #[wasm_bindgen_test]
+    fn reports_resource_limit_errors() {
+        let input_limit = options_with(
+            "maxInputBytes",
+            &JsValue::from_f64((PNG_INPUT.len() - 1) as f64),
+        );
+        assert!(thumbnail_png(PNG_INPUT, input_limit.as_ref()).is_err());
+
+        let memory_limit = options_with("maxMemoryBytes", &JsValue::from_f64(1.0));
+        assert!(thumbnail_png(PNG_INPUT, memory_limit.as_ref()).is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn reports_invalid_option_values() {
+        let cases = [
+            ("maxWidth", JsValue::from_f64(0.0)),
+            ("maxHeight", JsValue::from_f64(1.5)),
+            ("maxInputPixels", JsValue::from_f64(-1.0)),
+            ("maxOutputPixels", JsValue::from_str("many")),
+            ("allowUpscale", JsValue::from_str("true")),
+            ("fit", JsValue::from_str("cover")),
+            ("filter", JsValue::from_str("nearest")),
+            ("output", JsValue::from_str("jpeg")),
+        ];
+
+        for (name, value) in cases {
+            let options = options_with(name, &value);
+            assert!(
+                thumbnail_png(PNG_INPUT, options.as_ref()).is_err(),
+                "{name} must reject its invalid test value"
+            );
         }
     }
 }

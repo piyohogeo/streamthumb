@@ -85,6 +85,9 @@ CI covers Chrome and Firefox. The Cloudflare Worker adapter remains an example a
 
 Resource limits are part of the public API. See [SECURITY.md](SECURITY.md) for the exact memory boundary and remaining deadline limitations.
 
+See [docs/MVP_STATUS.md](docs/MVP_STATUS.md) for the design-to-implementation
+traceability matrix, verified runtime coverage, and explicitly deferred items.
+
 Fuzz targets for row decoding, the fused thumbnail path, and the area downsampler live in `fuzz/`. Build them with:
 
 ```text

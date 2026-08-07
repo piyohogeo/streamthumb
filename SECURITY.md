@@ -19,6 +19,11 @@ The current API does not impose a wall-clock deadline. Dimension and pixel limit
 
 The thumbnail APIs accept static 1-, 2-, 4-, 8-, and 16-bit grayscale PNG files; 8- and 16-bit grayscale-alpha, RGB, and RGBA PNG files; and 1-, 2-, 4-, and 8-bit palette PNG files, with either no interlacing or Adam7 interlacing. Palette, grayscale, and RGB `tRNS` transparency are supported. The lower-level row callback API accepts only non-interlaced input because its contract requires complete rows in ascending order. APNG is rejected deterministically rather than silently converted.
 
+Color-profile and transfer-function metadata is not interpreted during
+resampling or copied into encoded output. Samples are averaged in their encoded
+value space. Callers requiring linear-light processing or ICC color management
+must use a color-managed pipeline instead.
+
 ## Fuzzing
 
 Three libFuzzer targets cover row decoding, the fused PNG thumbnail API, and the codec-independent area downsampler. Scheduled Linux CI runs each target with AddressSanitizer. See `fuzz/README.md` for local commands and corpus provenance.
