@@ -50,7 +50,7 @@ All numeric options must be non-negative JavaScript safe integers. Operational d
 | `maxOutputWidth` | `8,192` | Maximum planned output width. |
 | `maxOutputHeight` | `8,192` | Maximum planned output height. |
 | `maxOutputPixels` | `16,777,216` | Maximum planned output width multiplied by height. |
-| `maxMemoryBytes` | `33,554,432` (32 MiB) | Maximum conservative working-memory estimate. It covers decoder storage, resize storage, encoder state, and bounded encoded output. It excludes caller-owned input, JavaScript memory, WebAssembly runtime overhead, and allocator slack. |
+| `maxMemoryBytes` | `33,554,432` (32 MiB) | Maximum conservative working-memory estimate. It covers decoder storage, resize storage, one completed output row for encoded PNG or the complete frame for raw RGBA, encoder state, and bounded encoded output. It excludes caller-owned input, JavaScript memory, WebAssembly runtime overhead, and allocator slack. |
 
 The requested bounding box and all applicable resource limits must pass. Setting a limit lower than the requested or calculated operation does not clamp the output; it rejects the operation.
 

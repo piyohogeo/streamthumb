@@ -1254,3 +1254,13 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. `RgbaCollector` makes full output-frame retention an explicit sink behavior. It validates row order, row length, and completeness before returning the existing `RgbaImage` representation.
 5. `MemoryEstimate` now exposes and counts one reusable `output_row_bytes` buffer. The complete `output_rgba_bytes` estimate remains unchanged for PNG and RGBA because the current high-level PNG path intentionally continues through the collector until the separate streaming-encoder phase.
 6. This phase does not change PNG encoding, public Rust/WASM thumbnail behavior, codec options, or dependencies. JPEG remains deferred until row-streamed PNG encoding is independently complete and measured.
+
+### Phase 25 decisions
+
+1. Encoded PNG output uses `png::Writer::into_stream_writer` behind a private `PngRowSink`. Ordered resampling pushes each completed row directly; Adam7 finalizes its sparse accumulators into the same sink.
+2. The raw RGBA API continues through `RgbaCollector` and retains the complete output frame. The encoded PNG path no longer constructs an intermediate `RgbaImage`.
+3. The encoded writer grows its output buffer incrementally, enforces the planned encoded-byte limit on every write, and maps limit and allocation failures back to typed public errors. The complete encoded result remains buffered because the current Rust and WebAssembly APIs return owned bytes.
+4. For encoded PNG, `MemoryEstimate::output_rgba_bytes` is zero and `output_row_bytes` remains one reusable RGBA row. Encoder state and the conservative encoded-output bound remain included. Adam7 additionally retains its output-area sparse accumulators.
+5. Ordered and Adam7 regression tests decode the streamed PNG and compare exact pixels with the compatibility RGBA path. Sink tests cover row-order and encoded-output-limit failures.
+6. A 2,048 x 2,048 output comparison against commit `c8d0a24` measured the architecture change. The conservative plan fell from 36,382,979 to 19,605,763 bytes; native Peak RSS fell from 23.80 to 8.31 MiB, and WebAssembly linear-memory high-water fell from 36.06 to 2.38 MiB on the documented Windows development host. These are single-run architectural measurements, not stable performance thresholds.
+7. This phase adds no codec options or dependencies and does not change the public output variants. PNG encoder configuration and JPEG remain separate later stages.

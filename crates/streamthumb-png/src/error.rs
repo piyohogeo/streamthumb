@@ -50,7 +50,7 @@ impl fmt::Display for Error {
                 "PNG decoder exceeded its {limit}-byte memory allowance"
             ),
             Self::AllocationFailed { bytes } => {
-                write!(formatter, "failed to allocate a {bytes}-byte row buffer")
+                write!(formatter, "failed to allocate a {bytes}-byte buffer")
             }
             Self::DecodeFailure(message) => write!(formatter, "PNG decode failure: {message}"),
             Self::EncodeFailure(message) => write!(formatter, "PNG encode failure: {message}"),

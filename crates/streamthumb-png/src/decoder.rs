@@ -6,7 +6,7 @@ use streamthumb_core::{
     SparseAreaDownsampler, ThumbnailOptions, plan_thumbnail, plan_thumbnail_sparse,
 };
 
-use crate::{Error, Result, ThumbnailOutput, UnsupportedFeature, encoder::encode_rgba_png};
+use crate::{Error, Result, ThumbnailOutput, UnsupportedFeature, encoder::PngRowSink};
 
 /// A normalized 8-bit RGBA source row.
 #[derive(Clone, Copy, Debug)]
@@ -157,21 +157,51 @@ pub fn thumbnail_png_rgba(input: &[u8], options: &ThumbnailOptions) -> Result<Rg
 
 /// Creates a thumbnail using the output representation selected in `options`.
 pub fn thumbnail_png(input: &[u8], options: &ThumbnailOptions) -> Result<ThumbnailOutput> {
-    let (image, plan) = thumbnail_png_rgba_planned(input, options)?;
     match options.output {
-        OutputFormat::Rgba => Ok(image.into()),
+        OutputFormat::Rgba => {
+            let (image, _) = thumbnail_png_rgba_planned(input, options)?;
+            Ok(image.into())
+        }
         OutputFormat::Png => {
-            let width = image.dimensions.width;
-            let height = image.dimensions.height;
-            let bytes = encode_rgba_png(&image, plan.memory.encoded_output_bytes)?;
+            let (bytes, plan) = thumbnail_png_encoded(input, options)?;
             Ok(ThumbnailOutput::Encoded {
                 bytes,
-                width,
-                height,
+                width: plan.output.width,
+                height: plan.output.height,
                 mime_type: "image/png",
             })
         }
     }
+}
+
+fn thumbnail_png_encoded(
+    input: &[u8],
+    options: &ThumbnailOptions,
+) -> Result<(Vec<u8>, ProcessingPlan)> {
+    if png_is_interlaced(input, options)? {
+        let (downsampler, plan) = thumbnail_png_adam7_downsampler(input, options)?;
+        let sink = PngRowSink::new(plan.output, plan.memory.encoded_output_bytes)?;
+        return Ok((downsampler.finish_into(sink)?, plan));
+    }
+
+    let mut downsampler: Option<AreaDownsampler<PngRowSink>> = None;
+    let decoded = decode_png_rows(input, options, |row| {
+        if downsampler.is_none() {
+            let sink = PngRowSink::new(row.plan.output, row.plan.memory.encoded_output_bytes)?;
+            downsampler = Some(AreaDownsampler::with_sink(
+                row.plan.source,
+                row.plan.output,
+                sink,
+            )?);
+        }
+        let active = downsampler.as_mut().ok_or_else(|| {
+            Error::DecodeFailure("failed to initialize the PNG row sink".to_owned())
+        })?;
+        active.push_row(row.y, row.pixels)?;
+        Ok(())
+    })?;
+    let bytes = downsampler.ok_or(Error::TruncatedInput)?.finish()?;
+    Ok((bytes, decoded.plan))
 }
 
 fn thumbnail_png_rgba_planned(
@@ -224,6 +254,14 @@ fn thumbnail_png_adam7_rgba_planned(
     input: &[u8],
     options: &ThumbnailOptions,
 ) -> Result<(RgbaImage, ProcessingPlan)> {
+    let (downsampler, plan) = thumbnail_png_adam7_downsampler(input, options)?;
+    Ok((downsampler.finish()?, plan))
+}
+
+fn thumbnail_png_adam7_downsampler(
+    input: &[u8],
+    options: &ThumbnailOptions,
+) -> Result<(SparseAreaDownsampler, ProcessingPlan)> {
     let encoded_bytes = checked_encoded_length(input, options)?;
     let decoder_limit = options.limits.max_working_memory_bytes;
     let mut decoder = png::Decoder::new_with_limits(
@@ -362,7 +400,7 @@ fn thumbnail_png_adam7_rgba_planned(
     reader
         .finish()
         .map_err(|error| map_decode_error(error, decoder_limit))?;
-    Ok((downsampler.finish()?, plan))
+    Ok((downsampler, plan))
 }
 
 #[derive(Clone, Copy)]
@@ -2148,6 +2186,55 @@ mod tests {
         let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut pixels).unwrap();
         assert_eq!(&pixels[..info.buffer_size()], &[0, 0, 255, 128]);
+    }
+
+    #[test]
+    fn streaming_png_matches_rgba_output_for_ordered_and_adam7_inputs() {
+        let width = 9;
+        let height = 7;
+        let pixels = (0..width * height)
+            .flat_map(|index| {
+                let value = u8::try_from(index).unwrap();
+                [
+                    value.wrapping_mul(3),
+                    value.wrapping_mul(5),
+                    value.wrapping_mul(7),
+                    value.wrapping_mul(11),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let ordered = encode_png(
+            width,
+            height,
+            ColorType::Rgba,
+            BitDepth::Eight,
+            Filter::Paeth,
+            &pixels,
+        );
+        let adam7 = encode_adam7_png(width, height, ColorType::Rgba, &pixels);
+
+        for input in [&ordered, &adam7] {
+            let rgba_options = ThumbnailOptions {
+                max_width: 4,
+                max_height: 3,
+                output: OutputFormat::Rgba,
+                ..default_options()
+            };
+            let expected = thumbnail_png_rgba(input, &rgba_options).unwrap();
+            let png_options = ThumbnailOptions {
+                output: OutputFormat::Png,
+                ..rgba_options
+            };
+            let (encoded, plan) = thumbnail_png_encoded(input, &png_options).unwrap();
+            let actual = thumbnail_png_rgba(&encoded, &rgba_options).unwrap();
+
+            assert_eq!(actual, expected);
+            assert_eq!(plan.memory.output_rgba_bytes, 0);
+            assert_eq!(
+                plan.memory.output_row_bytes,
+                usize::try_from(plan.output.width).unwrap() * 4
+            );
+        }
     }
 
     #[test]

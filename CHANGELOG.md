@@ -28,3 +28,6 @@ project follows Semantic Versioning.
   and expanded WebAssembly boundary tests for RGBA output and invalid options.
 - A codec-independent RGBA row-sink architecture with a compatibility
   collector, immediate ordered-row emission, and row-wise Adam7 finalization.
+- Direct row-streamed PNG encoding for ordered and Adam7 inputs, removing the
+  complete resized RGBA frame from encoded-output memory while preserving the
+  raw RGBA API and bounded encoded-byte result.

@@ -29,24 +29,25 @@ strict TypeScript declarations, and reproducible release-candidate artifacts.
 
 ## Streaming output extension status
 
-The first architecture stage from `STREAMTHUMB_STREAMING_OUTPUT_HANDOFF.md` is
-complete. `RgbaRowSink` separates completed thumbnail rows from resampling,
-`RgbaCollector` preserves the existing full-image API, ordered input emits rows
-as soon as their coverage is complete, and Adam7 output can be emitted row by
-row after sparse accumulation finishes.
+The first two architecture stages from
+`STREAMTHUMB_STREAMING_OUTPUT_HANDOFF.md` are complete. `RgbaRowSink` separates
+completed thumbnail rows from resampling, and `RgbaCollector` preserves the
+existing full-image API. Ordered input emits rows directly into a streaming PNG
+writer as soon as their coverage is complete. Adam7 retains its required
+output-sized sparse accumulators, then emits normalized rows through the same
+PNG sink without creating a second full RGBA frame.
 
-This stage does not yet reduce the high-level encoded PNG path's memory use.
-That path intentionally continues through `RgbaCollector` until the streaming
-PNG encoder is implemented independently. The memory estimate therefore still
-includes the complete output RGBA image and now exposes the additional reusable
-`output_row_bytes` buffer explicitly.
+For encoded PNG, `output_rgba_bytes` is now zero and `output_row_bytes` records
+the one reusable completed row. The complete encoded PNG remains buffered and
+bounded because the public API returns a `Vec<u8>` or JavaScript byte array.
+Raw RGBA output intentionally continues to retain the complete output frame.
 
 ## Explicit limitations and deferred work
 
 - APNG, JPEG, WebP, AVIF, general transformations, additional filters, and an
   incremental JavaScript input API are not currently implemented. JPEG output
-  is planned only after the row-streamed PNG path and its memory evidence are
-  complete.
+  is planned only after the row-streamed PNG path; the required PNG memory
+  evidence is now complete.
 - Resampling averages encoded color samples. It does not perform linear-light
   conversion or ICC color management, and encoded output does not inherit PNG
   color metadata.

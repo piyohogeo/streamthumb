@@ -12,6 +12,27 @@ using Rust 1.97.1, image 0.25.8, Node.js 24.14.1, and wasm-pack 0.15.0. They are
 illustrative and should not be treated as stable release thresholds. The
 jSquash adapter pins `@jsquash/png` 3.1.1 and `@jsquash/resize` 2.1.1.
 
+## Streaming-output architecture comparison
+
+A separate single-case run compares the row-streamed PNG encoder with commit
+`c8d0a24`, whose encoded path retained a complete resized RGBA frame before
+encoding. The source and output are both 2,048 x 2,048 blank RGBA, making the
+removed frame 16 MiB. The old run required a temporary 64 MiB budget because
+its 36,382,979-byte plan exceeded the public 32 MiB default; the new
+19,605,763-byte plan succeeds under that default.
+
+| Path | Runtime | Native Peak RSS | WASM high-water | Output |
+| --- | ---: | ---: | ---: | ---: |
+| Full resized RGBA then PNG (`c8d0a24`) | 263.5 ms native / 623.5 ms WASM | 23.80 MiB | 36.06 MiB | 20.6 KiB |
+| Row-streamed RGBA to PNG | 288.3 ms native / 592.3 ms WASM | 8.31 MiB | 2.38 MiB | 20.7 KiB |
+
+This single run measured about 65% lower native Peak RSS and 93% lower WASM
+linear-memory high-water. Encoded bytes can differ because streaming changes
+the encoder's data and chunk layout; regression tests decode both results and
+require exact RGBA pixel equivalence. These numbers use the same Windows
+development environment described below and are architectural evidence, not
+stable release thresholds.
+
 ## Native results
 
 | Input | Method | Encoded input | Runtime | Peak RSS | Output |

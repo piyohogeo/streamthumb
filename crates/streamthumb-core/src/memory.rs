@@ -23,12 +23,13 @@ pub struct MemoryEstimate {
     pub total_bytes: usize,
 }
 
-/// Estimates working memory without including encoded input storage or encoder state.
+/// Estimates working memory without including encoded input storage.
 ///
 /// The decoder allowance includes three packed source rows and conservative
 /// staging space for DEFLATE history and buffered decompressed data. Accumulator
 /// constants reserve four premultiplied `u128` color channels plus one weight per
-/// output pixel. Encoder state is not included yet.
+/// output pixel. Raw RGBA output retains the full result; encoded PNG output
+/// retains only one completed row while it is passed to the encoder.
 pub fn estimate_working_memory(
     source: Dimensions,
     output: Dimensions,
@@ -76,15 +77,16 @@ pub fn estimate_working_memory_for_output(
     let sparse_accumulator_bytes = 0;
     let output_row_bytes =
         checked_product(&[output_width, NORMALIZED_PIXEL_BYTES], "output RGBA row")?;
-    let output_rgba_bytes = checked_product(
+    let raw_rgba_bytes = checked_product(
         &[output_pixels, NORMALIZED_PIXEL_BYTES],
         "output RGBA buffer",
     )?;
-    let (encoder_state_bytes, encoded_output_bytes) = match output_format {
-        OutputFormat::Rgba => (0, 0),
+    let (output_rgba_bytes, encoder_state_bytes, encoded_output_bytes) = match output_format {
+        OutputFormat::Rgba => (raw_rgba_bytes, 0, 0),
         OutputFormat::Png => (
+            0,
             PNG_ENCODER_STATE_BYTES,
-            estimate_encoded_png_bytes(output, output_rgba_bytes)?,
+            estimate_encoded_png_bytes(output, raw_rgba_bytes)?,
         ),
     };
 
@@ -213,12 +215,27 @@ mod tests {
         let rgba = estimate_working_memory(source, output, 4).unwrap();
         let png = estimate_working_memory_for_output(source, output, 4, OutputFormat::Png).unwrap();
 
+        assert_eq!(png.output_rgba_bytes, 0);
         assert_eq!(png.encoder_state_bytes, 128 * 1024);
-        assert!(png.encoded_output_bytes > png.output_rgba_bytes);
+        assert!(png.encoded_output_bytes > rgba.output_rgba_bytes);
         assert_eq!(
             png.total_bytes,
-            rgba.total_bytes + png.encoder_state_bytes + png.encoded_output_bytes
+            rgba.total_bytes - rgba.output_rgba_bytes
+                + png.encoder_state_bytes
+                + png.encoded_output_bytes
         );
+    }
+
+    #[test]
+    fn png_output_does_not_retain_a_full_rgba_frame() {
+        let source = Dimensions::new(2_048, 2_048).unwrap();
+        let output = Dimensions::new(2_048, 2_048).unwrap();
+        let estimate =
+            estimate_working_memory_for_output(source, output, 4, OutputFormat::Png).unwrap();
+
+        assert_eq!(estimate.output_row_bytes, 2_048 * 4);
+        assert_eq!(estimate.output_rgba_bytes, 0);
+        assert_eq!(estimate.total_bytes, 19_605_763);
     }
 
     #[test]
