@@ -6,7 +6,7 @@ members = [
     "crates/streamthumb-wasm",
 ]
 resolver = "2"
-exclude = ["benchmarks", "fuzz"]
+exclude = ["benchmarks", "fuzz", "spikes/jpeg-encoder-selection"]
 
 [workspace.package]
 version = "0.1.0"

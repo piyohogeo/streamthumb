@@ -1274,3 +1274,11 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 5. Compression maps to the five stable public presets. `PngFilter::Default` retains the filter chosen by that preset, while seven explicit strategies override it.
 6. WebAssembly exposes the settings in a nested `png` object and rejects that object for raw RGBA output. CLI flags mirror every literal. TypeScript declarations, public examples, package checks, fuzzing, and browser boundary tests cover the new surface.
 7. Color-mode tests verify IHDR type and decoded pixels. Every compression/filter combination must decode successfully without asserting implementation-dependent encoded sizes. No JPEG dependency or option is introduced in this phase.
+
+### Phase 27 decisions
+
+1. The JPEG encoder spike selects `mozjpeg-rs` 0.9.2 with default features disabled, contingent on raising the workspace MSRV from Rust 1.85 to Rust 1.89 in the JPEG implementation phase. The selection evidence and alternatives are recorded in `docs/JPEG_ENCODER_SELECTION.md`.
+2. The selected streaming encoder accepts individual RGB rows, retains one MCU row, writes to the existing bounded output writer, exposes quality and subsampling, emits baseline sequential JPEG, forbids unsafe code in the selected feature set, and builds for `wasm32-unknown-unknown`.
+3. `jpeg-encoder` 0.6.1 remains faster in the isolated 512 x 512 spike but requires a complete input image. Its encoder-driven `ImageBuffer` callback cannot consume the existing push-oriented `RgbaRowSink` without retaining the output frame.
+4. The isolated spike is excluded from the production workspace and pins its candidate versions. It verifies baseline markers, one-row-at-a-time input, bounded-writer failure, native execution, and WebAssembly execution without adding a production JPEG dependency.
+5. The selected dependency is young and discloses incomplete human audit. Production adoption requires an exact version pin, independent multi-decoder validation, fuzz coverage, and reviewed dependency upgrades.

@@ -6,6 +6,7 @@
 /benchmarks/corpus/
 /benchmarks/results/
 /benchmarks/target/
+/spikes/jpeg-encoder-selection/target/
 /benchmarks/tmp/
 /benchmarks/wasm-pkg/
 /benchmarks/node_modules/
