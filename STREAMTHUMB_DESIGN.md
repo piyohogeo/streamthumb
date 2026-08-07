@@ -1165,3 +1165,10 @@ The Phase 0 and Phase 1 bootstrap made the following concrete decisions:
 4. RGB transparency adds only three `u16` values to source-format state. Row buffers, sparse accumulators, output memory, and public options are unchanged.
 5. Tests cover exact 8-bit transparency, a 16-bit normalization-collision case, both depths in Adam7 order, and malformed five- and seven-byte `tRNS` chunks rejected before callbacks.
 6. With RGB transparency implemented, the supported static PNG contract covers every standard PNG color type and legal bit depth, including Adam7 and the applicable `tRNS` forms. APNG animation remains out of scope.
+
+### Phase 14 decisions
+
+1. Browser runtime validation uses `wasm-bindgen-test` in a Dedicated Worker against the packaged API in headless Chrome and Firefox. These tests verify successful PNG generation and JavaScript option errors rather than stopping at a `wasm32-unknown-unknown` compile check.
+2. The module Web Worker example includes a deterministic smoke page that loads a checked-in PNG fixture, generates a thumbnail in the worker, and decodes the returned PNG in the browser.
+3. GitHub Actions runs the Chrome and Firefox WebAssembly tests on every normal CI invocation. The existing compile-only WebAssembly job remains as a faster diagnostic boundary.
+4. Cloudflare Worker runtime validation is deferred because no deployment account is available. The adapter remains an architecture example but is explicitly outside the browser CI matrix.

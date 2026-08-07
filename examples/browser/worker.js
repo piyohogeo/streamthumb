@@ -1,6 +1,12 @@
 import init, { thumbnailPng } from "../../pkg/streamthumb_wasm.js";
 
-await init();
+self.postMessage({ initializing: true });
+try {
+  await init();
+  self.postMessage({ ready: true });
+} catch (error) {
+  self.postMessage({ error: `WebAssembly initialization failed: ${error}` });
+}
 
 self.addEventListener("message", ({ data }) => {
   try {
@@ -24,4 +30,3 @@ self.addEventListener("message", ({ data }) => {
     self.postMessage({ error: String(error) });
   }
 });
-

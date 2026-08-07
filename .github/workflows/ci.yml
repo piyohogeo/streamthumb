@@ -31,6 +31,21 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo check -p streamthumb-wasm --target wasm32-unknown-unknown
 
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@wasm-pack
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          install-chromedriver: true
+      - run: wasm-pack test --headless --chrome --chromedriver=${{ steps.chrome.outputs.chromedriver-path }} crates/streamthumb-wasm
+      - run: wasm-pack test --headless --firefox crates/streamthumb-wasm
+
   benchmark-tool:
     runs-on: ubuntu-latest
     steps:

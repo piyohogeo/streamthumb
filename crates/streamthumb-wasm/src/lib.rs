@@ -229,3 +229,55 @@ fn optional_u64(object: &JsValue, name: &str) -> Result<Option<u64>, JsError> {
         })
         .transpose()
 }
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod browser_tests {
+    use super::*;
+    use js_sys::Object;
+    use wasm_bindgen_test::*;
+
+    wasm_bindgen_test_configure!(run_in_dedicated_worker);
+
+    const PNG_INPUT: &[u8] =
+        include_bytes!("../../../fuzz/corpus/thumbnail_png/pngsuite_basn6a08.png");
+
+    #[wasm_bindgen_test]
+    fn creates_a_png_thumbnail_in_a_dedicated_worker() {
+        let options = Object::new();
+        Reflect::set(
+            options.as_ref(),
+            &JsValue::from_str("maxWidth"),
+            &JsValue::from_f64(8.0),
+        )
+        .expect("the test options object must be writable");
+        Reflect::set(
+            options.as_ref(),
+            &JsValue::from_str("maxHeight"),
+            &JsValue::from_f64(8.0),
+        )
+        .expect("the test options object must be writable");
+        Reflect::set(
+            options.as_ref(),
+            &JsValue::from_str("output"),
+            &JsValue::from_str("png"),
+        )
+        .expect("the test options object must be writable");
+
+        let result = thumbnail_png(PNG_INPUT, options.as_ref()).expect("thumbnail must succeed");
+        let bytes = result.bytes();
+
+        assert_eq!(result.width(), 8);
+        assert_eq!(result.height(), 8);
+        assert_eq!(result.mime_type(), "image/png");
+        assert_eq!(result.format(), "png");
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[wasm_bindgen_test]
+    fn reports_invalid_browser_options() {
+        match thumbnail_png(PNG_INPUT, &JsValue::from_str("invalid")) {
+            Ok(_) => panic!("non-object options must fail"),
+            Err(_) => {}
+        }
+    }
+}

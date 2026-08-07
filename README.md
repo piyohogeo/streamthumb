@@ -43,6 +43,15 @@ Check the WebAssembly build with:
 cargo check -p streamthumb-wasm --target wasm32-unknown-unknown
 ```
 
+Run the WebAssembly API in headless browsers with:
+
+```text
+wasm-pack test --headless --chrome crates/streamthumb-wasm
+wasm-pack test --headless --firefox crates/streamthumb-wasm
+```
+
+CI covers Chrome and Firefox. The Cloudflare Worker adapter remains an example and is not part of browser CI.
+
 ## Security and fuzzing
 
 Resource limits are part of the public API. See [SECURITY.md](SECURITY.md) for the exact memory boundary and remaining deadline limitations.
